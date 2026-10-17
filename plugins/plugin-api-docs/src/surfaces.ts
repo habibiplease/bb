@@ -938,7 +938,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
         bullets: [
           "Call its server from its UI with schema-checked RPC and typed refusals",
           "Receive webhooks and serve HTTP or WebSocket routes",
-          "Predict shared reads with pure, replayable updates; generate IDs and timestamps before the write",
+          "Predict tagged reads with pure replay, rollback, Retry, pending saves and successful-read timestamps",
           "Publish RPC methods other plugins can discover and watch; run producers while reads are watched",
         ],
         apiSymbols: [
