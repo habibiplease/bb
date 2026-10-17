@@ -478,5 +478,3 @@ export function useQuerySelection<Snapshot, Selection>(
   }, [value]);
   return value;
 }
-
-export { createResourceReadCache } from "./resource-read-cache.js";
