@@ -1,4 +1,6 @@
 import {
+  createContext,
+  useContext,
   useCallback,
   useEffect,
   useRef,
@@ -183,32 +185,43 @@ function SignOutDialog({
   );
 }
 
+function useSignOutMutation() {
+  return experimental_useRpcMutation<
+    typeof accountPrivateRpcContract,
+    "signOut"
+  >({
+    method: "signOut",
+    optimistic(_input, cache) {
+      cache.update("login.poll", { loginId: null }, (current) => ({
+        ...current,
+        login: null,
+        status: { ...current.status, state: "signed-out", account: null },
+      }));
+    },
+  });
+}
+const signOutContext = createContext<ReturnType<
+  typeof useSignOutMutation
+> | null>(null);
+
 function SignOutControl({
   onSignedOut,
 }: {
   onSignedOut: (result: SignOutResult) => void;
 }) {
-  const { mutate: signOutRpc } = experimental_useRpcMutation<
-    typeof accountPrivateRpcContract,
-    "signOut"
-  >({ method: "signOut" });
+  const mutation = useContext(signOutContext);
+  if (mutation === null)
+    throw new Error("Sign out requires an account settings owner");
+  const { mutate: signOutRpc, isPending: pending } = mutation;
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const signOut = useCallback(() => {
-    setPending(true);
-    setError(null);
     signOutRpc(null).then(
       (result) => {
-        setPending(false);
         setConfirmOpen(false);
         onSignedOut(result);
       },
-      (rpcError: unknown) => {
-        setPending(false);
-        setError(errorText(rpcError));
-      },
+      () => undefined,
     );
   }, [onSignedOut, signOutRpc]);
 
@@ -223,9 +236,6 @@ function SignOutControl({
       >
         Sign out
       </Button>
-      {error !== null ? (
-        <p className="text-xs text-destructive-text">{error}</p>
-      ) : null}
       <SignOutDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
@@ -632,6 +642,16 @@ function SignedOutContent({
 }
 
 function AccountSettingsSection() {
+  const mutation = useSignOutMutation();
+  return (
+    <signOutContext.Provider value={mutation}>
+      <AccountSettingsContent />
+    </signOutContext.Provider>
+  );
+}
+
+function AccountSettingsContent() {
+  const signOut = useContext(signOutContext);
   const { state, loadError, refetch } = useAccountState();
   const [notice, setNotice] = useState<ReactNode>(null);
   const onSignedOut = useCallback(
@@ -643,7 +663,12 @@ function AccountSettingsSection() {
   );
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" aria-busy={signOut?.isPending}>
+      {signOut?.error && (
+        <p role="alert" className="text-sm text-destructive-text">
+          {errorText(signOut.error)}
+        </p>
+      )}
       {loadError !== null ? (
         <div role="alert">
           <p className="text-sm text-destructive-text">

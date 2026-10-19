@@ -488,7 +488,7 @@ describe("connect settings section", () => {
     expect(slot.queryByText(":8080")).toBeNull();
   });
 
-  it("blocks duplicate revocations while pending and allows retry after bulk failure", async () => {
+  it("removes revoked shares instantly and restores them when revocation fails", async () => {
     let rejectRevoke: (error: Error) => void = () => {};
     const slot = renderConnect(
       app.settingsSections[0]!,
@@ -514,7 +514,7 @@ describe("connect settings section", () => {
         },
       },
     );
-    const revokeAll = await slot.findByRole("button", {
+    let revokeAll = await slot.findByRole("button", {
       name: "Revoke all (1) shared ports on Workstation",
     });
     fireEvent.click(revokeAll);
@@ -524,16 +524,17 @@ describe("connect settings section", () => {
         input: { hostId: "host-server" },
       }),
     );
-    expect(revokeAll.hasAttribute("disabled")).toBe(true);
-    expect(
-      slot.getByRole("button", { name: "Revoke" }).hasAttribute("disabled"),
-    ).toBe(true);
+    expect(revokeAll.isConnected).toBe(false);
+    expect(slot.queryByRole("button", { name: "Revoke" })).toBeNull();
     fireEvent.click(revokeAll);
     expect(
       slot.rpcCalls.filter((call) => call.method === "unexposeAll"),
     ).toHaveLength(1);
     rejectRevoke(new Error("Could not save shared ports"));
     await slot.findByText("Could not save shared ports");
+    revokeAll = await slot.findByRole("button", {
+      name: "Revoke all (1) shared ports on Workstation",
+    });
     expect(revokeAll.hasAttribute("disabled")).toBe(false);
     fireEvent.click(revokeAll);
     await waitFor(() =>
@@ -845,4 +846,32 @@ describe("Connect settings realtime recovery", () => {
     await slot.findByText("Connected");
     expect(slot.queryByText(/Failed to load/)).toBeNull();
   });
+});
+
+it("predicts remote access intent and restores it after a failed write", async () => {
+  let rejectWrite!: (error: Error) => void;
+  const write = new Promise<never>((_resolve, reject) => {
+    rejectWrite = reject;
+  });
+  const slot = renderConnect(
+    app.settingsSections[0]!,
+    {},
+    {
+      rpc: {
+        status: () => connected(),
+        setRemoteAccess: () => write,
+      },
+    },
+  );
+  await slot.findByText("Connected");
+  fireEvent.click(slot.getByRole("button", { name: "Turn off" }));
+  await slot.findByText("Turn off remote access?");
+  fireEvent.click(slot.getAllByRole("button", { name: "Turn off" }).at(-1)!);
+  await slot.findByText("Remote access is off");
+  expect(
+    slot.getByRole("button", { name: "Turn on" }).hasAttribute("disabled"),
+  ).toBe(false);
+  await act(async () => rejectWrite(new Error("Remote access refused")));
+  await slot.findByText("Connected");
+  await slot.findByText("Remote access refused");
 });

@@ -387,3 +387,27 @@ describe("bb account settings section", () => {
     expect(slot.queryByText("expired_code")).toBeNull();
   });
 });
+
+it("shows sign-out immediately and rolls back a failed write", async () => {
+  let rejectWrite!: (error: Error) => void;
+  const write = new Promise<never>((_resolve, reject) => {
+    rejectWrite = reject;
+  });
+  const slot = renderAccount(
+    app.settingsSections[0]!,
+    {},
+    {
+      rpc: {
+        "login.poll": () => ({ login: null, status: signedIn }),
+        signOut: () => write,
+      },
+    },
+  );
+  fireEvent.click(await slot.findByRole("button", { name: "Sign out" }));
+  await slot.findByText("Sign out of your bb account?");
+  fireEvent.click(slot.getAllByRole("button", { name: "Sign out" }).at(-1)!);
+  await slot.findByRole("button", { name: "Sign in" });
+  await act(async () => rejectWrite(new Error("Sign out refused")));
+  await slot.findByRole("button", { name: "Sign out" });
+  await slot.findByText("Sign out refused");
+});
