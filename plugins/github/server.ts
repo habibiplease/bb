@@ -1,3 +1,4 @@
+import { applySelectionChange, selectionChange } from "./selection-change.js";
 import { execFile } from "node:child_process";
 import {
   defineRpcContract,
@@ -195,7 +196,10 @@ export const githubRpcContract = defineRpcContract({
       "items:issue",
     ],
     input: itemInputSchema
-      .extend({ assignees: z.array(z.string().min(1)) })
+      .extend({
+        assignees: z.array(z.string().min(1)),
+        previousAssignees: z.array(z.string().min(1)).optional(),
+      })
       .strict(),
     output: z
       .object({ ok: z.literal(true), assignees: z.array(z.string().min(1)) })
@@ -206,7 +210,12 @@ export const githubRpcContract = defineRpcContract({
       `issue:${input.repo}#${input.number}`,
       "items:issue",
     ],
-    input: itemInputSchema.extend({ labels: z.array(z.string()) }).strict(),
+    input: itemInputSchema
+      .extend({
+        labels: z.array(z.string()),
+        previousLabels: z.array(z.string()).optional(),
+      })
+      .strict(),
     output: z
       .object({ ok: z.literal(true), labels: z.array(z.string().min(1)) })
       .strict(),
@@ -778,6 +787,25 @@ export default async function plugin(bb: BbPluginApi) {
     return rows.map(rowToItem);
   }
 
+  const issueWrites = new Map<string, Promise<void>>();
+  function writeIssue<Result>(
+    repo: string,
+    number: number,
+    work: () => Promise<Result>,
+  ): Promise<Result> {
+    const key = `${repo}#${number}`;
+    const write = (issueWrites.get(key) ?? Promise.resolve()).then(work);
+    const settled = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    issueWrites.set(key, settled);
+    void settled.then(() => {
+      if (issueWrites.get(key) === settled) issueWrites.delete(key);
+    });
+    return write;
+  }
+
   function getCachedItem(
     kind: "issue" | "pr",
     repo: string,
@@ -1158,66 +1186,95 @@ export default async function plugin(bb: BbPluginApi) {
     },
 
     async setIssueState({ repo, number, state }): Promise<{ ok: true }> {
-      await gh([
-        "issue",
-        state === "closed" ? "close" : "reopen",
-        String(number),
-        "-R",
-        repo,
-      ]);
-      patchCachedItem(repo, number, {
-        state: state === "closed" ? "CLOSED" : "OPEN",
+      return writeIssue<{ ok: true }>(repo, number, async () => {
+        await gh([
+          "issue",
+          state === "closed" ? "close" : "reopen",
+          String(number),
+          "-R",
+          repo,
+        ]);
+        patchCachedItem(repo, number, {
+          state: state === "closed" ? "CLOSED" : "OPEN",
+        });
+        return { ok: true };
       });
-      return { ok: true };
     },
 
     async setAssignees({
       repo,
       number,
       assignees,
+      previousAssignees,
     }): Promise<{ ok: true; assignees: string[] }> {
-      const next = [...new Set(assignees)];
-      const current = getCachedItem("issue", repo, number)?.assignees ?? [];
-      const add = next.filter((login) => !current.includes(login));
-      const remove = current.filter((login) => !next.includes(login));
-      if (add.length === 0 && remove.length === 0)
-        return { ok: true, assignees: next };
-      const args = ["issue", "edit", String(number), "-R", repo];
-      if (add.length > 0) args.push("--add-assignee", add.join(","));
-      if (remove.length > 0) args.push("--remove-assignee", remove.join(","));
-      await gh(args);
-      patchCachedItem(repo, number, { assignees: next });
-      return { ok: true, assignees: next };
+      return writeIssue<{ ok: true; assignees: string[] }>(
+        repo,
+        number,
+        async () => {
+          const current = getCachedItem("issue", repo, number)?.assignees ?? [];
+          const next = applySelectionChange(
+            current,
+            assignees,
+            previousAssignees,
+          );
+          const { add, remove } = selectionChange(
+            assignees,
+            previousAssignees ?? current,
+          );
+          if (add.length === 0 && remove.length === 0)
+            return { ok: true, assignees: next };
+          const args = ["issue", "edit", String(number), "-R", repo];
+          if (add.length > 0)
+            args.push("--add-assignee", [...new Set(add)].join(","));
+          if (remove.length > 0)
+            args.push("--remove-assignee", [...new Set(remove)].join(","));
+          await gh(args);
+          patchCachedItem(repo, number, { assignees: next });
+          return { ok: true, assignees: next };
+        },
+      );
     },
 
     async setLabels({
       repo,
       number,
       labels,
+      previousLabels,
     }): Promise<{ ok: true; labels: string[] }> {
-      const next = [
-        ...new Set(labels.map((label) => label.trim()).filter(Boolean)),
-      ];
-      const currentRaw = await gh(
-        ["issue", "view", String(number), "-R", repo, "--json", "labels"],
-        15_000,
+      return writeIssue<{ ok: true; labels: string[] }>(
+        repo,
+        number,
+        async () => {
+          const requested = [
+            ...new Set(labels.map((label) => label.trim()).filter(Boolean)),
+          ];
+          const previous = previousLabels
+            ?.map((label) => label.trim())
+            .filter(Boolean);
+          const raw = await gh(
+            ["issue", "view", String(number), "-R", repo, "--json", "labels"],
+            15_000,
+          );
+          const current = z
+            .object({ labels: z.array(z.object({ name: z.string() })) })
+            .parse(JSON.parse(raw))
+            .labels.map((label) => label.name.trim())
+            .filter(Boolean);
+          const next = applySelectionChange(current, requested, previous);
+          const { add, remove } = selectionChange(
+            requested,
+            previous ?? current,
+          );
+          if (add.length === 0 && remove.length === 0)
+            return { ok: true, labels: next };
+          const args = ["issue", "edit", String(number), "-R", repo];
+          for (const label of add) args.push("--add-label", label);
+          for (const label of remove) args.push("--remove-label", label);
+          await gh(args);
+          patchCachedItem(repo, number, { labels: next });
+          return { ok: true, labels: next };
+        },
       );
-      const currentDetail = JSON.parse(currentRaw) as {
-        labels?: Array<{ name?: unknown }>;
-      };
-      const current = (currentDetail.labels ?? [])
-        .map((label) => String(label?.name ?? "").trim())
-        .filter((label) => label.length > 0);
-      const add = next.filter((label) => !current.includes(label));
-      const remove = current.filter((label) => !next.includes(label));
-      if (add.length === 0 && remove.length === 0)
-        return { ok: true, labels: next };
-      const args = ["issue", "edit", String(number), "-R", repo];
-      for (const label of add) args.push("--add-label", label);
-      for (const label of remove) args.push("--remove-label", label);
-      await gh(args);
-      patchCachedItem(repo, number, { labels: next });
-      return { ok: true, labels: next };
     },
 
     async getIssue({ repo, number }) {

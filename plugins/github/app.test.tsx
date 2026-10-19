@@ -349,3 +349,61 @@ it.each(["labels", "assignees", "state"] as const)(
     }
   },
 );
+
+it.each(["labels", "assignees"] as const)(
+  "rolls back only the failed %s edit while a later edit is pending",
+  async (field) => {
+    let rejectFirst!: (error: Error) => void;
+    let resolveSecond!: (value: unknown) => void;
+    const first = new Promise<never>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const second = new Promise<unknown>((resolve) => {
+      resolveSecond = resolve;
+    });
+    let calls = 0;
+    let selected: string[] = [];
+    const names = field === "labels" ? ["bug", "feature"] : ["mona", "hubot"];
+    const { view } = detailView("issue", false, {
+      getIssue: () => ({ issue: { ...issue, [field]: selected } }),
+      [field === "labels" ? "setLabels" : "setAssignees"]: () =>
+        ++calls === 1 ? first : second,
+      repositoryLabels: () => ({ labels: names }),
+      assignableUsers: () => ({ users: names }),
+      viewer: () => ({ login: "octocat" }),
+    });
+    try {
+      await view.findByText("Live detail");
+      fireEvent.pointerDown(
+        view.getAllByRole("button", { name: "Edit" })[
+          field === "labels" ? 1 : 0
+        ]!,
+      );
+      const firstOption = await view.findByRole("menuitemcheckbox", {
+        name: new RegExp(names[0]!),
+      });
+      fireEvent.click(firstOption);
+      await waitFor(() =>
+        expect(firstOption.getAttribute("aria-checked")).toBe("true"),
+      );
+      const secondOption = view.getByRole("menuitemcheckbox", {
+        name: new RegExp(names[1]!),
+      });
+      fireEvent.click(secondOption);
+      await waitFor(() =>
+        expect(secondOption.getAttribute("aria-checked")).toBe("true"),
+      );
+      await act(async () => rejectFirst(new Error("First edit refused")));
+      await waitFor(() =>
+        expect(firstOption.getAttribute("aria-checked")).toBe("false"),
+      );
+      expect(secondOption.getAttribute("aria-checked")).toBe("true");
+      selected = [names[1]!];
+      await act(async () => resolveSecond({ ok: true, [field]: selected }));
+      expect(firstOption.getAttribute("aria-checked")).toBe("false");
+      expect(secondOption.getAttribute("aria-checked")).toBe("true");
+    } finally {
+      view.lifecycle.unmount();
+    }
+  },
+);

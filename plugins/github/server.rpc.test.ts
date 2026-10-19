@@ -473,3 +473,28 @@ describe("github plugin RPC behavior", () => {
     });
   });
 });
+
+it("applies only the changed selection when a client supplies its previous selection", async () => {
+  const { harness } = await loadPlugin();
+  await harness.callRpc("refresh");
+  await expect(
+    harness.callRpc("setLabels", {
+      repo: "acme/widgets",
+      number: 7,
+      labels: ["bug", "old", "failed", "feature"],
+      previousLabels: ["bug", "old", "failed"],
+    }),
+  ).resolves.toEqual({ ok: true, labels: ["bug", "old", "feature"] });
+  await expect(
+    harness.callRpc("setAssignees", {
+      repo: "acme/widgets",
+      number: 7,
+      assignees: ["octocat", "failed", "hubot"],
+      previousAssignees: ["octocat", "failed"],
+    }),
+  ).resolves.toEqual({ ok: true, assignees: ["octocat", "hubot"] });
+  expect(ghCalls().filter((call) => call.startsWith("issue edit"))).toEqual([
+    "issue edit 7 -R acme/widgets --add-label feature",
+    "issue edit 7 -R acme/widgets --add-assignee hubot",
+  ]);
+});

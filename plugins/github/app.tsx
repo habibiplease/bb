@@ -1,3 +1,4 @@
+import { applySelectionChange } from "./selection-change.js";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   definePluginApp,
@@ -312,31 +313,25 @@ function LabelChips({
   );
 }
 
+type IssueMetadata = Pick<Item, "state" | "assignees" | "labels">;
 function predictIssueMetadata(
   cache: ExperimentalRpcOptimisticCache<typeof githubRpcContract>,
   input: { repo: string; number: number },
-  patch: Partial<
-    Pick<
-      NonNullable<
-        PluginRpcResult<(typeof githubRpcContract)["getIssue"]>["issue"]
-      >,
-      "state" | "assignees" | "labels"
-    >
-  >,
+  patch: (current: IssueMetadata) => Partial<IssueMetadata>,
 ) {
   cache.update(
     "getIssue",
     { repo: input.repo, number: input.number },
     (current) => ({
       ...current,
-      issue: { ...current.issue, ...patch },
+      issue: { ...current.issue, ...patch(current.issue) },
     }),
   );
   cache.update("listItems", { kind: "issue" }, (current) => ({
     ...current,
     items: current.items.map((item) =>
       item.repo === input.repo && item.number === input.number
-        ? { ...item, ...patch }
+        ? { ...item, ...patch(item) }
         : item,
     ),
   }));
@@ -349,9 +344,9 @@ function useIssueMutations() {
   >({
     method: "setIssueState",
     optimistic(input, cache) {
-      predictIssueMetadata(cache, input, {
+      predictIssueMetadata(cache, input, () => ({
         state: input.state === "closed" ? "CLOSED" : "OPEN",
-      });
+      }));
     },
   });
   const assignees = experimental_useRpcMutation<
@@ -360,7 +355,13 @@ function useIssueMutations() {
   >({
     method: "setAssignees",
     optimistic(input, cache) {
-      predictIssueMetadata(cache, input, { assignees: input.assignees });
+      predictIssueMetadata(cache, input, (current) => ({
+        assignees: applySelectionChange(
+          current.assignees,
+          input.assignees,
+          input.previousAssignees,
+        ),
+      }));
     },
   });
   const labels = experimental_useRpcMutation<
@@ -369,7 +370,13 @@ function useIssueMutations() {
   >({
     method: "setLabels",
     optimistic(input, cache) {
-      predictIssueMetadata(cache, input, { labels: input.labels });
+      predictIssueMetadata(cache, input, (current) => ({
+        labels: applySelectionChange(
+          current.labels,
+          input.labels,
+          input.previousLabels,
+        ),
+      }));
     },
   });
   return {
@@ -386,10 +393,18 @@ function useIssueMutations() {
             next === "closed" ? `#${number} closed` : `#${number} reopened`,
           ),
         ),
-    setAssignees: (repo: string, number: number, next: string[]) =>
-      assignees.mutate({ repo, number, assignees: next }),
-    setLabels: (repo: string, number: number, next: string[]) =>
-      labels.mutate({ repo, number, labels: next }),
+    setAssignees: (
+      repo: string,
+      number: number,
+      next: string[],
+      previousAssignees: string[],
+    ) => assignees.mutate({ repo, number, assignees: next, previousAssignees }),
+    setLabels: (
+      repo: string,
+      number: number,
+      next: string[],
+      previousLabels: string[],
+    ) => labels.mutate({ repo, number, labels: next, previousLabels }),
   };
 }
 
@@ -634,7 +649,7 @@ function RowMenu({ item }: { item: Item }) {
     const next = assignedToMe
       ? item.assignees.filter((login) => login !== viewer)
       : [...item.assignees, viewer];
-    setAssignees(item.repo, item.number, next)
+    setAssignees(item.repo, item.number, next, item.assignees)
       .then(() =>
         toast.success(
           assignedToMe
@@ -1066,8 +1081,8 @@ function IssueDetailView({
     const next = assigned
       ? [...new Set([...detail.assignees, login])]
       : detail.assignees.filter((entry) => entry !== login);
-    void setAssignees(repo, number, next).catch((err: unknown) =>
-      toast.error(errorText(err)),
+    void setAssignees(repo, number, next, detail.assignees).catch(
+      (err: unknown) => toast.error(errorText(err)),
     );
   };
   const toggleLabel = (label: string, enabled: boolean) => {
@@ -1075,7 +1090,7 @@ function IssueDetailView({
     const next = enabled
       ? [...new Set([...detail.labels, label])]
       : detail.labels.filter((entry) => entry !== label);
-    void setLabels(repo, number, next).catch((err: unknown) =>
+    void setLabels(repo, number, next, detail.labels).catch((err: unknown) =>
       toast.error(errorText(err)),
     );
   };
