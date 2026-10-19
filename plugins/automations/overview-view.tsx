@@ -254,8 +254,12 @@ export function OverviewRow({
   onEnabledChange,
   onRunNow,
   onDelete,
+  pending = false,
+  runPending = false,
 }: {
   automation: AutomationResponse;
+  pending?: boolean;
+  runPending?: boolean;
   project: OverviewEntry["project"];
   onNavigate: (route: AutomationDetailRoute) => void;
   onEnabledChange: (
@@ -265,8 +269,6 @@ export function OverviewRow({
   onRunNow: (route: AutomationDetailRoute) => Promise<void>;
   onDelete: (route: AutomationDetailRoute, name: string) => void;
 }) {
-  const [togglePending, setTogglePending] = useState(false);
-  const [runPending, setRunPending] = useState(false);
   const route = routeOf(automation);
   const oneShotLifecycle = getOneShotLifecycle({
     enabled: automation.enabled,
@@ -290,8 +292,7 @@ export function OverviewRow({
           name={automation.name}
           pending={runPending}
           onRunNow={() => {
-            setRunPending(true);
-            void onRunNow(route).finally(() => setRunPending(false));
+            void onRunNow(route);
           }}
           onDelete={() => onDelete(route, automation.name)}
         />
@@ -300,7 +301,8 @@ export function OverviewRow({
       persistentActions={
         <AutomationLifecycleControl
           checked={automation.enabled && !lifecycleLocked}
-          disabled={lifecycleLocked || togglePending}
+          disabled={lifecycleLocked}
+          pending={pending}
           disabledReason={
             lifecycleLocked
               ? oneShotLifecycle === "expired"
@@ -310,10 +312,7 @@ export function OverviewRow({
           }
           label={`${automation.enabled ? "Disable" : "Enable"} ${automation.name}`}
           onCheckedChange={(enabled) => {
-            setTogglePending(true);
-            void onEnabledChange(enabled, route).finally(() =>
-              setTogglePending(false),
-            );
+            void onEnabledChange(enabled, route);
           }}
         />
       }
@@ -442,6 +441,8 @@ function automationSearchValues(
 
 export function AutomationOverviewView({
   entries,
+  pendingInputs = [],
+  runInputs = [],
   error,
   onRetry,
   onOpenDetail,
@@ -453,6 +454,8 @@ export function AutomationOverviewView({
   onModeChange,
 }: {
   entries: OverviewEntry[] | null;
+  pendingInputs?: readonly AutomationDetailRoute[];
+  runInputs?: readonly AutomationDetailRoute[];
   error: string | null;
   onRetry: () => void;
   onOpenDetail: (
@@ -633,6 +636,16 @@ export function AutomationOverviewView({
             />
           ) : (
             <OverviewRow
+              runPending={runInputs.some(
+                (input) =>
+                  input.projectId === automation.projectId &&
+                  input.automationId === automation.id,
+              )}
+              pending={pendingInputs.some(
+                (input) =>
+                  input.projectId === entry.automation.projectId &&
+                  input.automationId === entry.automation.id,
+              )}
               key={automation.id}
               automation={automation}
               project={project}

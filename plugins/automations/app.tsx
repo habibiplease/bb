@@ -17,6 +17,7 @@ import type {
   AgentExecutionUpdate,
   AutomationRunListResponse,
 } from "./src/rpc-types";
+import { applyAgentExecutionUpdate } from "./src/agent-execution-update.js";
 import { AutomationDetailView } from "./detail-view";
 import {
   AutomationOverviewView,
@@ -128,15 +129,46 @@ function useRuns(route: DetailRoute) {
   };
 }
 
+function useEnabledMutation(
+  method: "automations_pause" | "automations_resume",
+) {
+  return experimental_useRpcMutation<
+    typeof automationRpcContract,
+    typeof method
+  >({
+    method,
+    optimistic(input, cache) {
+      const enabled = method === "automations_resume";
+      cache.update("automations_get", input, (current) =>
+        "problem" in current ? current : { ...current, enabled },
+      );
+      cache.update(
+        "automations_list",
+        { projectId: input.projectId },
+        (current) =>
+          current.map((automation) =>
+            automation.id === input.automationId && !("problem" in automation)
+              ? { ...automation, enabled }
+              : automation,
+          ),
+      );
+      cache.update("automations_overview", null, (current) => ({
+        ...current,
+        automations: current.automations.map((entry) =>
+          entry.automation.id === input.automationId &&
+          entry.automation.projectId === input.projectId &&
+          !("problem" in entry.automation)
+            ? { ...entry, automation: { ...entry.automation, enabled } }
+            : entry,
+        ),
+      }));
+    },
+  });
+}
+
 function useMutations() {
-  const pause = experimental_useRpcMutation<
-    typeof automationRpcContract,
-    "automations_pause"
-  >({ method: "automations_pause" });
-  const resume = experimental_useRpcMutation<
-    typeof automationRpcContract,
-    "automations_resume"
-  >({ method: "automations_resume" });
+  const pause = useEnabledMutation("automations_pause");
+  const resume = useEnabledMutation("automations_resume");
   const run = experimental_useRpcMutation<
     typeof automationRpcContract,
     "automations_run"
@@ -144,12 +176,78 @@ function useMutations() {
   const remove = experimental_useRpcMutation<
     typeof automationRpcContract,
     "automations_delete"
-  >({ method: "automations_delete" });
+  >({
+    method: "automations_delete",
+    optimistic(input, cache) {
+      cache.update(
+        "automations_list",
+        { projectId: input.projectId },
+        (current) => current.filter((a) => a.id !== input.automationId),
+      );
+      cache.update("automations_overview", null, (current) => ({
+        ...current,
+        automations: current.automations.filter(
+          (entry) =>
+            entry.automation.id !== input.automationId ||
+            entry.automation.projectId !== input.projectId,
+        ),
+      }));
+    },
+  });
   const update = experimental_useRpcMutation<
     typeof automationRpcContract,
     "automations_update"
-  >({ method: "automations_update" });
+  >({
+    method: "automations_update",
+    optimistic(input, cache) {
+      const predict = <Value extends AutomationResponse>(
+        current: Value,
+      ): Value => ({
+        ...current,
+        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(input.trigger === undefined ? {} : { trigger: input.trigger }),
+        ...(input.agent === undefined || current.execution.mode !== "agent"
+          ? {}
+          : {
+              execution: applyAgentExecutionUpdate(
+                current.execution,
+                input.agent,
+              ),
+            }),
+      });
+      cache.update(
+        "automations_get",
+        { projectId: input.projectId, automationId: input.automationId },
+        (current) => ("problem" in current ? current : predict(current)),
+      );
+      cache.update(
+        "automations_list",
+        { projectId: input.projectId },
+        (current) =>
+          current.map((a) =>
+            a.id === input.automationId && !("problem" in a) ? predict(a) : a,
+          ),
+      );
+      cache.update("automations_overview", null, (current) => ({
+        ...current,
+        automations: current.automations.map((entry) =>
+          entry.automation.id === input.automationId &&
+          entry.automation.projectId === input.projectId &&
+          !("problem" in entry.automation)
+            ? { ...entry, automation: predict(entry.automation) }
+            : entry,
+        ),
+      }));
+    },
+  });
   return {
+    pendingInputs: [
+      ...pause.pendingInputs,
+      ...resume.pendingInputs,
+      ...update.pendingInputs,
+    ],
+    runPending: run.isPending,
+    runInputs: run.pendingInputs,
     pause: pause.mutate,
     resume: resume.mutate,
     run: run.mutate,
@@ -260,9 +358,11 @@ function OverviewView({
 
   const confirmDelete = useCallback(() => {
     if (deleteTarget === null) return;
+    const target = deleteTarget;
     setDeleting(true);
+    setDeleteTarget(null);
     mutations
-      .delete(deleteTarget.route)
+      .delete(target.route)
       .then(
         () => {
           toast.success("Automation deleted");
@@ -287,6 +387,8 @@ function OverviewView({
   return (
     <>
       <AutomationOverviewView
+        pendingInputs={mutations.pendingInputs}
+        runInputs={mutations.runInputs}
         entries={entries}
         error={error}
         onRetry={refetch}
@@ -327,7 +429,11 @@ function DetailView({
   const overviewState = useOverview();
   const runsState = useRuns(route);
   const mutations = useMutations();
-  const [actionPending, setActionPending] = useState(false);
+  const actionPending = mutations.pendingInputs.some(
+    (input) =>
+      input.projectId === route.projectId &&
+      input.automationId === route.automationId,
+  );
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -352,18 +458,13 @@ function DetailView({
 
   const runAction = useCallback(
     (method: "pause" | "resume" | "run") => {
-      setActionPending(true);
-      mutations[method](route)
-        .then(
-          () => {
-            if (method === "run") toast.success("Run started");
-          },
-          (rpcError: unknown) =>
-            toast.error(
-              `Failed to ${method} automation: ${errorText(rpcError)}`,
-            ),
-        )
-        .finally(() => setActionPending(false));
+      mutations[method](route).then(
+        () => {
+          if (method === "run") toast.success("Run started");
+        },
+        (rpcError: unknown) =>
+          toast.error(`Failed to ${method} automation: ${errorText(rpcError)}`),
+      );
     },
     [mutations, route],
   );
@@ -379,16 +480,12 @@ function DetailView({
 
   const updateAgent = useCallback(
     async (agent: AgentExecutionUpdate) => {
-      setActionPending(true);
+      setEditingRequested(false);
       try {
         await mutations.update(route, agent);
         toast.success("Automation updated");
-        setEditingRequested(false);
       } catch (rpcError: unknown) {
         toast.error(`Failed to update automation: ${errorText(rpcError)}`);
-        throw rpcError;
-      } finally {
-        setActionPending(false);
       }
     },
     [mutations, route],
@@ -396,13 +493,13 @@ function DetailView({
 
   const confirmDelete = useCallback(() => {
     setDeleting(true);
-    mutations
-      .delete(route)
+    setDeleteOpen(false);
+    const write = mutations.delete(route);
+    onBack();
+    write
       .then(
         () => {
           toast.success("Automation deleted");
-          setDeleteOpen(false);
-          onBack();
         },
         (rpcError: unknown) =>
           toast.error(`Failed to delete automation: ${errorText(rpcError)}`),
@@ -493,6 +590,7 @@ function DetailView({
       projectLabel={projectLabel}
       runsState={runsState}
       actionPending={actionPending}
+      runPending={mutations.runPending}
       editing={requiresPrompt || editingRequested}
       onToggle={(checked) => runAction(checked ? "resume" : "pause")}
       onEdit={openEdit}

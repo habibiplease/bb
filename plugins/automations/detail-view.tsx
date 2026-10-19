@@ -70,6 +70,7 @@ interface AutomationDetailViewProps {
   projectLabel: string;
   runsState: AutomationRunsViewState;
   actionPending: boolean;
+  runPending?: boolean;
   editing: boolean;
   onToggle: (enabled: boolean) => void;
   onEdit: () => void;
@@ -111,6 +112,7 @@ function ignorePermissionModeChange(): void {}
 
 interface AutomationLifecycleControlProps {
   checked: boolean;
+  pending?: boolean;
   disabled?: boolean;
   disabledReason?: string;
   label: string;
@@ -119,6 +121,7 @@ interface AutomationLifecycleControlProps {
 
 export function AutomationLifecycleControl({
   checked,
+  pending = false,
   disabled = false,
   disabledReason,
   label,
@@ -127,6 +130,7 @@ export function AutomationLifecycleControl({
   const control = (
     <Switch
       checked={checked}
+      aria-busy={pending}
       disabled={disabled}
       aria-label={label}
       onCheckedChange={onCheckedChange}
@@ -566,7 +570,7 @@ export function AgentAutomationDefinition({
           value={permissionMode}
           onChange={setPermissionMode}
           {...(pickerRouting === undefined ? {} : { routing: pickerRouting })}
-          disabled={pending}
+          aria-busy={pending}
           className="h-6 shrink-0"
         />
       ) : (
@@ -602,7 +606,7 @@ export function AgentAutomationDefinition({
         value={prompt}
         onChange={(event) => setPrompt(event.target.value)}
         aria-label="Automation prompt"
-        disabled={pending}
+        aria-busy={pending}
         className="min-h-28 resize-none border-0 bg-transparent px-4 pb-1 pr-14 pt-3 text-sm leading-relaxed shadow-none focus-visible:ring-0"
       />
       <div
@@ -615,7 +619,6 @@ export function AgentAutomationDefinition({
             onChange={setProviderModel}
             {...(pickerRouting === undefined ? {} : { routing: pickerRouting })}
             allowProviderChange={execution.targetThreadId === undefined}
-            disabled={pending}
             className="h-6 max-w-full"
           />
         </div>
@@ -624,7 +627,7 @@ export function AgentAutomationDefinition({
           variant="ghost"
           size="sm"
           className="ml-auto shrink-0"
-          disabled={pending || dirty}
+          disabled={dirty}
           onClick={onCancel}
         >
           Cancel
@@ -633,7 +636,8 @@ export function AgentAutomationDefinition({
           type="submit"
           size="sm"
           className="shrink-0"
-          disabled={pending || !dirty || trimmedPrompt.length === 0}
+          disabled={!dirty || trimmedPrompt.length === 0}
+          aria-busy={pending}
         >
           <Icon name="Check" className="size-3.5" aria-hidden />
           Save Prompt
@@ -738,6 +742,7 @@ export function AutomationDetailView({
   projectLabel,
   runsState,
   actionPending,
+  runPending = false,
   editing,
   onToggle,
   onEdit,
@@ -803,7 +808,8 @@ export function AutomationDetailView({
       lifecycleControl={
         <AutomationLifecycleControl
           checked={automation.enabled}
-          disabled={actionPending || lifecycleLocked}
+          disabled={lifecycleLocked}
+          pending={actionPending}
           disabledReason={lifecycleDisabledReason}
           label={
             requiresPrompt
@@ -822,7 +828,7 @@ export function AutomationDetailView({
       overflowMenu={
         <AutomationActionsMenu
           name={automation.name}
-          pending={actionPending}
+          pending={runPending}
           runDisabledReason={
             requiresPrompt
               ? "Add a prompt before running this automation."
@@ -912,7 +918,7 @@ export function AutomationDetailView({
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={actionPending || requiresPrompt}
+                  disabled={runPending || requiresPrompt}
                   onClick={onRunNow}
                 >
                   <Icon name="Play" className="size-3.5" aria-hidden />

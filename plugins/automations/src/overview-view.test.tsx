@@ -254,7 +254,7 @@ describe("AutomationOverviewView", () => {
       automationId: "auto_1",
     });
     expect(onOpenDetail).not.toHaveBeenCalled();
-    expect(actions()).toHaveProperty("disabled", true);
+    expect(actions()).toHaveProperty("disabled", false);
 
     await act(async () => {
       resolveRun?.();

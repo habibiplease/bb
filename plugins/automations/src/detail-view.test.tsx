@@ -890,3 +890,78 @@ it("keeps loaded run rows through refresh and Load more errors and retries the m
   fireEvent.click(slot.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(slot.queryByText("Runs unavailable.")).toBeNull());
 }, 30000);
+
+it.each(["toggle", "edit"])(
+  "predicts an automation %s immediately and rolls back a refused write",
+  async (kind) => {
+    const app = await loadPluginApp(() => import("../app.js"));
+    let rejectWrite!: (error: Error) => void;
+    const write = new Promise<never>((_resolve, reject) => {
+      rejectWrite = reject;
+    });
+    const slot = renderSlot<
+      PluginNavPanelProps,
+      ReadContract &
+        Pick<
+          typeof automationRpcContract,
+          "automations_pause" | "automations_update"
+        >
+    >(
+      app.navPanels[0]!,
+      {
+        subPath: `${AUTOMATION.projectId}/${AUTOMATION.id}${kind === "edit" ? "/edit" : ""}`,
+      },
+      {
+        experimental_rpcContract: automationRpcContract,
+        rpc: {
+          automations_overview: () => ({
+            automations: [
+              {
+                automation: AUTOMATION,
+                project: { id: AUTOMATION.projectId, name: "Personal" },
+              },
+            ],
+          }),
+          automations_get: () => AUTOMATION,
+          automations_run_pages: ({ keys }) =>
+            Object.fromEntries(
+              keys.map((key) => [key, { runs: [], nextCursor: null }]),
+            ),
+          automations_pause: () => write,
+          automations_update: () => write,
+        },
+      },
+    );
+    if (kind === "toggle") {
+      const control = await slot.findByRole("switch", {
+        name: "Pause automation",
+      });
+      fireEvent.click(control);
+      await waitFor(() =>
+        expect(control.getAttribute("aria-checked")).toBe("false"),
+      );
+      expect(control).toHaveProperty("disabled", false);
+      await act(async () => rejectWrite(new Error("Write refused")));
+      await waitFor(() =>
+        expect(control.getAttribute("aria-checked")).toBe("true"),
+      );
+    } else {
+      const editor = await slot.findByRole("textbox", {
+        name: "Automation prompt",
+      });
+      fireEvent.change(editor, { target: { value: "Updated instantly" } });
+      fireEvent.click(slot.getByRole("button", { name: "Save Prompt" }));
+      await slot.findByText("Updated instantly");
+      expect(
+        slot.queryByRole("textbox", { name: "Automation prompt" }),
+      ).toBeNull();
+      await act(async () => rejectWrite(new Error("Write refused")));
+      await slot.findByText(
+        AUTOMATION.execution.mode === "agent"
+          ? AUTOMATION.execution.prompt
+          : "",
+      );
+      expect(slot.queryByText("Updated instantly")).toBeNull();
+    }
+  },
+);

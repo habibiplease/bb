@@ -16,12 +16,11 @@ export function AutomationActionsMenu({
   return (
     <ResourceOverflowMenu
       label={`${name} actions`}
-      disabled={pending}
       items={[
         {
           label: "Run now",
           icon: "Play",
-          disabled: runDisabledReason !== undefined,
+          disabled: pending || runDisabledReason !== undefined,
           disabledReason: runDisabledReason,
           onSelect: onRunNow,
         },

@@ -1,3 +1,4 @@
+import { applyAgentExecutionUpdate } from "./agent-execution-update.js";
 import type { AutomationRunPageInput } from "./rpc-types.js";
 import { isAbsolute, join } from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
@@ -32,7 +33,6 @@ import {
   WORKING_DIRECTORY_CONTROL_CHARACTER_MESSAGE,
   automationRunListResponseSchema,
   automationsOverviewResponseSchema,
-  type AgentExecutionUpdate,
   type AutomationExecution,
   type AutomationExecutionRequest,
   type AutomationDetailReadResult,
@@ -434,46 +434,6 @@ async function cleanupSupersededScript(args: {
 
 function encodeRunCursor(startedAt: number, id: string): string {
   return Buffer.from(`${startedAt}:${id}`, "utf8").toString("base64url");
-}
-
-function applyAgentExecutionUpdate(
-  execution: AutomationExecution,
-  update: AgentExecutionUpdate,
-): Extract<AutomationExecution, { mode: "agent" }> {
-  if (execution.mode !== "agent") {
-    throw new Error(
-      "Agent execution options can only update agent automations",
-    );
-  }
-
-  const next = {
-    ...execution,
-    ...(update.prompt !== undefined ? { prompt: update.prompt } : {}),
-    ...(update.providerId !== undefined
-      ? { providerId: update.providerId }
-      : {}),
-    ...(update.model !== undefined ? { model: update.model } : {}),
-    ...(update.reasoningLevel !== undefined
-      ? { reasoningLevel: update.reasoningLevel }
-      : {}),
-    ...(update.permissionMode !== undefined
-      ? { permissionMode: update.permissionMode }
-      : {}),
-  };
-  if (update.serviceTier === null) {
-    delete next.serviceTier;
-  } else if (update.serviceTier !== undefined) {
-    next.serviceTier = update.serviceTier;
-  }
-  if (update.target === undefined) return next;
-  if (update.target.type === "target-thread") {
-    return { ...next, targetThreadId: update.target.threadId };
-  }
-  const { targetThreadId: _targetThreadId, ...withoutTargetThread } = next;
-  return {
-    ...withoutTargetThread,
-    environment: update.target.environment,
-  };
 }
 
 function parseRunCursor(
