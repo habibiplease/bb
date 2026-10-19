@@ -937,3 +937,51 @@ it.each([false, true])(
   },
   20_000,
 );
+
+it.each(["priority", "remove"])(
+  "predicts an account %s and restores it after a failed write",
+  async (action) => {
+    const write = deferred<never>();
+    const first = account({ label: "First", priority: 100 });
+    const second = account({
+      id: "22222222-2222-4222-8222-222222222222",
+      label: "Second",
+      priority: 100,
+    });
+    const slot = render([first, second], {
+      [action === "priority" ? "account.setPriority" : "account.remove"]: () =>
+        write.promise,
+    });
+    fireEvent.pointerDown(
+      await slot.findByRole("button", { name: "First actions" }),
+    );
+    fireEvent.click(
+      await slot.findByText(action === "priority" ? "Set priority…" : "Remove"),
+    );
+    if (action === "priority") {
+      fireEvent.change(await slot.findByLabelText("Account priority"), {
+        target: { value: "200" },
+      });
+      fireEvent.click(slot.getByRole("button", { name: "Save" }));
+      await waitFor(() =>
+        expect(
+          slot
+            .getAllByRole("button", { name: /^Reorder / })
+            .map((row) => row.getAttribute("aria-label")),
+        ).toEqual(["Reorder Second", "Reorder First"]),
+      );
+    } else {
+      fireEvent.click(slot.getAllByRole("button", { name: "Remove" }).at(-1)!);
+      await waitFor(() =>
+        expect(slot.queryByRole("button", { name: "Open First" })).toBeNull(),
+      );
+    }
+    await act(async () => write.reject(new Error("Write refused")));
+    await slot.findByText("Write refused");
+    expect(
+      slot
+        .getAllByRole("button", { name: /^Reorder / })
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual(["Reorder First", "Reorder Second"]);
+  },
+);

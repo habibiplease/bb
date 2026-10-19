@@ -904,14 +904,57 @@ function AccountPoolSettings() {
     method: "config.set",
     optimistic(input, cache) {
       cache.update("config.get", null, (current) => ({ ...current, ...input }));
+      const mode = input.parentMode;
+      if (mode !== undefined)
+        cache.update("status.get", null, (current) => ({
+          ...current,
+          parent: current.parent === null ? null : { ...current.parent, mode },
+        }));
+    },
+  });
+  const priorityMutation = experimental_useRpcMutation<
+    typeof accountPoolRpcContract,
+    "account.setPriority"
+  >({
+    method: "account.setPriority",
+    optimistic(input, cache) {
+      cache.update("status.get", null, (current) => ({
+        ...current,
+        accounts: current.accounts
+          .map((account) =>
+            account.id === input.accountId
+              ? { ...account, priority: input.priority }
+              : account,
+          )
+          .sort((left, right) => left.priority - right.priority),
+      }));
+    },
+  });
+  const removeMutation = experimental_useRpcMutation<
+    typeof accountPoolRpcContract,
+    "account.remove"
+  >({
+    method: "account.remove",
+    optimistic(input, cache) {
+      cache.update("status.get", null, (current) => {
+        const accounts = current.accounts.filter(
+          (account) => account.id !== input.id,
+        );
+        return {
+          ...current,
+          accounts,
+          enabledAccountCount: accounts.filter((account) => account.enabled)
+            .length,
+        };
+      });
     },
   });
   const mutations = {
     "account.add": usePoolMutation("account.add"),
-    "account.remove": usePoolMutation("account.remove"),
+    "account.remove": removeMutation.mutate,
     "account.enable": enable.mutate,
     "account.disable": disable.mutate,
-    "account.setPriority": usePoolMutation("account.setPriority"),
+    "account.setPriority": priorityMutation.mutate,
     "account.refreshUsage": usePoolMutation("account.refreshUsage"),
     "config.set": configMutation.mutate,
     "login.complete": usePoolMutation("login.complete"),
@@ -979,9 +1022,7 @@ function AccountPoolSettings() {
   });
   const [dialog, setDialog] = useState<DialogState>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<ReadonlyMap<string, boolean | null>>(
-    () => new Map(),
-  );
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, {
@@ -1045,6 +1086,9 @@ function AccountPoolSettings() {
     disable.error?.message ??
     routing.error?.message ??
     reorder.error?.message ??
+    priorityMutation.error?.message ??
+    removeMutation.error?.message ??
+    configMutation.error?.message ??
     error;
   useEffect(() => {
     if (codexStep === null || loginDone !== null) return;
@@ -1090,23 +1134,19 @@ function AccountPoolSettings() {
     dialog?.kind === "remove"
       ? (accounts.find((account) => account.id === dialog.accountId) ?? null)
       : null;
-  function markPending(key: string, target: boolean | null): void {
-    setPending((current) => new Map(current).set(key, target));
+  function markPending(key: string): void {
+    setPending((current) => new Set(current).add(key));
   }
   function clearPending(key: string): void {
     setPending((current) => {
-      const next = new Map(current);
+      const next = new Set(current);
       next.delete(key);
       return next;
     });
   }
-  async function run(
-    key: string,
-    action: () => Promise<void>,
-    target: boolean | null = null,
-  ): Promise<void> {
+  async function run(key: string, action: () => Promise<void>): Promise<void> {
     if (pending.has(key)) return;
-    markPending(key, target);
+    markPending(key);
     setError(null);
     try {
       await action();
@@ -1116,15 +1156,15 @@ function AccountPoolSettings() {
       clearPending(key);
     }
   }
-  function switchValue(key: string, stored: boolean): boolean {
-    return pending.get(key) ?? stored;
-  }
   function accountPending(accountId: string): boolean {
     return (
       (enable.isPending &&
         enable.pendingInputs.some((input) => input.id === accountId)) ||
       (disable.isPending &&
         disable.pendingInputs.some((input) => input.id === accountId)) ||
+      priorityMutation.pendingInputs.some(
+        (input) => input.accountId === accountId,
+      ) ||
       ACCOUNT_ACTIONS.some((action) => pending.has(`${action}-${accountId}`))
     );
   }
@@ -1290,18 +1330,15 @@ function AccountPoolSettings() {
               </p>
             </div>
             <Switch
-              checked={switchValue("parent-mode", proxying)}
+              checked={proxying}
+              aria-busy={configMutation.pendingInputs.some(
+                (input) => input.parentMode !== undefined,
+              )}
               aria-label="Use the parent Account Pooler"
               onCheckedChange={(enabled) =>
-                void run(
-                  "parent-mode",
-                  async () => {
-                    await mutations["config.set"]({
-                      parentMode: enabled ? "proxy" : "isolate",
-                    });
-                  },
-                  enabled,
-                )
+                void configMutation
+                  .mutate({ parentMode: enabled ? "proxy" : "isolate" })
+                  .catch((actionError) => setError(errorText(actionError)))
               }
             />
           </div>
@@ -1592,19 +1629,16 @@ function AccountPoolSettings() {
                   Cancel
                 </Button>
                 <Button
-                  disabled={
-                    !Number.isInteger(Number(priority)) ||
-                    pending.has(`priority-${selectedAccount.id}`)
-                  }
-                  onClick={() =>
-                    void run(`priority-${selectedAccount.id}`, async () => {
-                      await mutations["account.setPriority"]({
+                  disabled={!Number.isInteger(Number(priority))}
+                  onClick={() => {
+                    void priorityMutation
+                      .mutate({
                         accountId: selectedAccount.id,
                         priority: Number(priority),
-                      });
-                      setDialog(null);
-                    })
-                  }
+                      })
+                      .catch((actionError) => setError(errorText(actionError)));
+                    setDialog(null);
+                  }}
                 >
                   Save
                 </Button>
@@ -1682,10 +1716,11 @@ function AccountPoolSettings() {
                   disabled={pending.has(`remove-${selectedAccount.id}`)}
                   onClick={() =>
                     void run(`remove-${selectedAccount.id}`, async () => {
-                      await mutations["account.remove"]({
+                      const write = mutations["account.remove"]({
                         id: selectedAccount.id,
                       });
                       setDialog(null);
+                      await write;
                     })
                   }
                 >
