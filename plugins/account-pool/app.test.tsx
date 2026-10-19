@@ -390,7 +390,12 @@ describe("Account Pool settings", () => {
         slot
           .getByRole("button", { name: "Reorder person@example.com" })
           .hasAttribute("disabled"),
-      ).toBe(true);
+      ).toBe(false);
+      expect(
+        slot
+          .getByRole("button", { name: "Reorder person@example.com" })
+          .getAttribute("aria-busy"),
+      ).toBe("true");
       expect(
         slot
           .getByRole("button", { name: "Reorder Other" })
@@ -810,7 +815,8 @@ describe("Account Pool settings", () => {
           .getAllByRole("button", { name: /Reorder (First|Second)/ })
           .map((button) => button.getAttribute("aria-label"));
       expect(providerOrder()).toEqual(["Reorder Second", "Reorder First"]);
-      expect(handle.hasAttribute("disabled")).toBe(true);
+      expect(handle.hasAttribute("disabled")).toBe(false);
+      expect(handle.getAttribute("aria-busy")).toBe("true");
       finishSave();
       await waitFor(() => expect(handle.hasAttribute("disabled")).toBe(false));
       expect(providerOrder()).toEqual(["Reorder Second", "Reorder First"]);

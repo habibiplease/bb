@@ -388,6 +388,7 @@ function AccountRow({
   account,
   threshold,
   pending,
+  blocked,
   refreshing,
   onAction,
   onOpen,
@@ -396,6 +397,7 @@ function AccountRow({
   account: AccountSummary;
   threshold: number;
   pending: boolean;
+  blocked: boolean;
   refreshing: boolean;
   onAction: (action: (typeof ACCOUNT_ACTIONS)[number]) => void;
   onOpen: () => void;
@@ -412,9 +414,10 @@ function AccountRow({
     setNodeRef,
     transform,
     transition,
-  } = useSortable({ id: account.id, disabled: pending || reorderDisabled });
+  } = useSortable({ id: account.id, disabled: blocked || reorderDisabled });
   return (
     <div
+      aria-busy={pending}
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
@@ -428,7 +431,8 @@ function AccountRow({
         variant="ghost"
         size="icon"
         className="size-8 shrink-0 touch-none text-muted-foreground enabled:cursor-grab enabled:active:cursor-grabbing"
-        disabled={pending || reorderDisabled}
+        disabled={blocked || reorderDisabled}
+        aria-busy={pending}
         aria-label={`Reorder ${account.label}`}
         {...attributes}
         {...listeners}
@@ -497,21 +501,21 @@ function AccountRow({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
             <DropdownMenuItem
-              disabled={pending}
+              disabled={blocked}
               onSelect={() => onAction("toggle")}
             >
               <Icon name={account.enabled ? "Circle" : "CircleCheck"} />
               {account.enabled ? "Disable" : "Enable"}
             </DropdownMenuItem>
             <DropdownMenuItem
-              disabled={pending}
+              disabled={blocked}
               onSelect={() => onAction("priority")}
             >
               <Icon name="ListView" />
               Set priority…
             </DropdownMenuItem>
             <DropdownMenuItem
-              disabled={pending}
+              disabled={blocked}
               onSelect={() => onAction("refresh")}
             >
               <Icon name="RotateCcw" />
@@ -520,7 +524,7 @@ function AccountRow({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               variant="destructive"
-              disabled={pending}
+              disabled={blocked}
               onSelect={() => onAction("remove")}
             >
               <Icon name="Trash2" />
@@ -960,7 +964,7 @@ function AccountPoolSettings() {
       }));
     },
   });
-  const [config, setConfig] = useState<AccountPoolConfig | null>(null);
+  const config = configQuery.data ?? null;
   const [drafts, setDrafts] = useState<Record<ConfigField, string>>({
     anthropicUpstreamBaseUrl: "",
     codexUpstreamBaseUrl: "",
@@ -978,7 +982,6 @@ function AccountPoolSettings() {
   const [pending, setPending] = useState<ReadonlyMap<string, boolean | null>>(
     () => new Map(),
   );
-  const configSaving = configMutation.isPending;
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, {
@@ -997,11 +1000,6 @@ function AccountPoolSettings() {
   const threshold =
     config?.switchThreshold ?? DEFAULT_ACCOUNT_POOL_CONFIG.switchThreshold;
   const appliedConfig = useRef<AccountPoolConfig | null>(null);
-  const applyConfig = useCallback((next: AccountPoolConfig) => {
-    appliedConfig.current = next;
-    setConfig(next);
-    setDrafts(configDrafts(next));
-  }, []);
   useEffect(() => {
     if (
       statusQuery.data === undefined ||
@@ -1021,24 +1019,25 @@ function AccountPoolSettings() {
     )
       return;
     const previous = appliedConfig.current;
-    if (
-      previous === null ||
-      previous.parentMode !== next.parentMode ||
-      CONFIG_FIELDS.some((field) => previous[field] !== next[field])
-    )
-      applyConfig(next);
+    if (previous !== next) {
+      const priorDrafts = previous === null ? null : configDrafts(previous);
+      const nextDrafts = configDrafts(next);
+      setDrafts((current) => {
+        const drafts = { ...current };
+        for (const field of CONFIG_FIELDS)
+          if (priorDrafts === null || current[field] === priorDrafts[field])
+            drafts[field] = nextDrafts[field];
+        return drafts;
+      });
+      appliedConfig.current = next;
+    }
     setConfigErrors({
       anthropicUpstreamBaseUrl: null,
       codexUpstreamBaseUrl: null,
       switchThreshold: null,
     });
     setError(null);
-  }, [
-    configQuery.data,
-    configQuery.isFetching,
-    configQuery.error,
-    applyConfig,
-  ]);
+  }, [configQuery.data, configQuery.isFetching, configQuery.error]);
   const displayError =
     configQuery.error?.message ??
     statusQuery.error?.message ??
@@ -1134,7 +1133,7 @@ function AccountPoolSettings() {
     setConfigErrors((current) => ({ ...current, [field]: null }));
   }
   async function saveConfigField(field: ConfigField): Promise<void> {
-    if (config === null || configSaving) return;
+    if (config === null) return;
     let update: AccountPoolConfigSetInput;
     if (field === "switchThreshold") {
       const raw = drafts.switchThreshold.trim();
@@ -1171,7 +1170,7 @@ function AccountPoolSettings() {
     }
     setConfigErrors((current) => ({ ...current, [field]: null }));
     try {
-      applyConfig(await mutations["config.set"](update));
+      await mutations["config.set"](update);
     } catch (saveError) {
       setConfigErrors((current) => ({
         ...current,
@@ -1246,7 +1245,7 @@ function AccountPoolSettings() {
     provider: PoolProvider,
     event: DragEndEvent,
   ): Promise<void> {
-    if (reorder.isPending || event.over === null) return;
+    if (event.over === null) return;
     const ids = accounts
       .filter((account) => account.provider === provider)
       .map((account) => account.id);
@@ -1366,6 +1365,9 @@ function AccountPoolSettings() {
                   <Switch
                     checked={status?.routing[provider.id] ?? true}
                     aria-label={`Route ${provider.title} threads`}
+                    aria-busy={routing.pendingInputs.some(
+                      (input) => input.provider === provider.id,
+                    )}
                     onCheckedChange={(enabled) => {
                       setError(null);
                       void routing
@@ -1407,14 +1409,20 @@ function AccountPoolSettings() {
                           key={account.id}
                           account={account}
                           threshold={threshold}
-                          pending={accountPending(account.id)}
+                          pending={
+                            accountPending(account.id) ||
+                            reorder.pendingInputs.some(
+                              (input) => input.provider === provider.id,
+                            )
+                          }
+                          blocked={ACCOUNT_ACTIONS.some((action) =>
+                            pending.has(`${action}-${account.id}`),
+                          )}
                           refreshing={
                             statusIsCached ||
                             pending.has(`refresh-${account.id}`)
                           }
-                          reorderDisabled={
-                            providerAccounts.length < 2 || reorder.isPending
-                          }
+                          reorderDisabled={providerAccounts.length < 2}
                           onAction={(action) =>
                             void accountAction(account, action)
                           }
@@ -1455,7 +1463,10 @@ function AccountPoolSettings() {
                       ? undefined
                       : true
                   }
-                  disabled={config === null || configSaving}
+                  disabled={config === null}
+                  aria-busy={configMutation.pendingInputs.some(
+                    (input) => input.anthropicUpstreamBaseUrl !== undefined,
+                  )}
                   value={drafts.anthropicUpstreamBaseUrl}
                   onChange={(event) =>
                     updateConfigDraft(
@@ -1483,7 +1494,10 @@ function AccountPoolSettings() {
                       ? undefined
                       : true
                   }
-                  disabled={config === null || configSaving}
+                  disabled={config === null}
+                  aria-busy={configMutation.pendingInputs.some(
+                    (input) => input.codexUpstreamBaseUrl !== undefined,
+                  )}
                   value={drafts.codexUpstreamBaseUrl}
                   onChange={(event) =>
                     updateConfigDraft(
@@ -1511,7 +1525,10 @@ function AccountPoolSettings() {
                   aria-invalid={
                     configErrors.switchThreshold === null ? undefined : true
                   }
-                  disabled={config === null || configSaving}
+                  disabled={config === null}
+                  aria-busy={configMutation.pendingInputs.some(
+                    (input) => input.switchThreshold !== undefined,
+                  )}
                   value={drafts.switchThreshold}
                   onChange={(event) =>
                     updateConfigDraft("switchThreshold", event.target.value)
