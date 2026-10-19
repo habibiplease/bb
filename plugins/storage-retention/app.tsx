@@ -242,16 +242,18 @@ function StoragePage({
   loadError: string | null;
   refresh: () => void;
 }) {
-  const { mutate: configure, isPending: savingSetting } =
-    experimental_useRpcMutation<typeof storageRpc, "configure">({
-      method: "configure",
-      optimistic(input, cache) {
-        cache.update("state", null, (current) => ({
-          ...current,
-          policy: { ...current.policy, ...input },
-        }));
-      },
-    });
+  const { mutate: configure, pendingInputs } = experimental_useRpcMutation<
+    typeof storageRpc,
+    "configure"
+  >({
+    method: "configure",
+    optimistic(input, cache) {
+      cache.update("state", null, (current) => ({
+        ...current,
+        policy: { ...current.policy, ...input },
+      }));
+    },
+  });
   const { mutate: startCleanup } = experimental_useRpcMutation<
     typeof storageRpc,
     "startCleanup"
@@ -351,8 +353,7 @@ function StoragePage({
     }
   }
   async function saveSetting<K extends keyof Policy>(key: K, value: Policy[K]) {
-    if (state === null || savingSetting) return;
-    const next = { ...state, policy: { ...state.policy, [key]: value } };
+    if (state === null) return;
     const description = {
       archiveAfterDays: "Archive inactive threads",
       deleteAfterDays: "Delete archived threads",
@@ -361,7 +362,7 @@ function StoragePage({
         "Delete development data when its checkout is removed",
     }[key];
     try {
-      await configure(next.policy);
+      await configure({ [key]: value });
     } catch (error) {
       toast.error("Couldn’t save setting", {
         description: `${description} · ${message(error)}`,
@@ -1181,7 +1182,9 @@ function StoragePage({
                     description="After this long with no activity."
                     presets={ARCHIVE_PRESETS}
                     value={policy.archiveAfterDays}
-                    disabled={savingSetting}
+                    pending={pendingInputs.some(
+                      (input) => input.archiveAfterDays !== undefined,
+                    )}
                     onChange={(value) =>
                       void saveSetting("archiveAfterDays", value)
                     }
@@ -1191,7 +1194,9 @@ function StoragePage({
                     description="Permanently, after this long in the archive."
                     presets={DELETE_PRESETS}
                     value={policy.deleteAfterDays}
-                    disabled={savingSetting}
+                    pending={pendingInputs.some(
+                      (input) => input.deleteAfterDays !== undefined,
+                    )}
                     onChange={(value) =>
                       void saveSetting("deleteAfterDays", value)
                     }
@@ -1210,7 +1215,9 @@ function StoragePage({
                     <Switch
                       aria-label="Delete thread storage on archive"
                       checked={policy.deleteStorageOnArchive}
-                      disabled={savingSetting}
+                      aria-busy={pendingInputs.some(
+                        (input) => input.deleteStorageOnArchive !== undefined,
+                      )}
                       onCheckedChange={(checked) =>
                         void saveSetting("deleteStorageOnArchive", checked)
                       }
@@ -1230,7 +1237,10 @@ function StoragePage({
                     <Switch
                       aria-label="Delete development data when its checkout is removed"
                       checked={policy.deleteDevDataOnCheckoutRemoval}
-                      disabled={savingSetting}
+                      aria-busy={pendingInputs.some(
+                        (input) =>
+                          input.deleteDevDataOnCheckoutRemoval !== undefined,
+                      )}
                       onCheckedChange={(checked) =>
                         void saveSetting(
                           "deleteDevDataOnCheckoutRemoval",
@@ -1572,14 +1582,14 @@ function RetentionField({
   description,
   presets,
   value,
-  disabled,
+  pending,
   onChange,
 }: {
   label: string;
   description: string;
   presets: number[];
   value: number | null;
-  disabled: boolean;
+  pending: boolean;
   onChange: (value: number | null) => void;
 }) {
   const options =
@@ -1595,13 +1605,16 @@ function RetentionField({
         </p>
       </div>
       <Select
-        disabled={disabled}
         value={value === null ? "never" : String(value)}
         onValueChange={(next) =>
           onChange(next === "never" ? null : Number(next))
         }
       >
-        <SelectTrigger aria-label={label} className="h-8 w-40 shrink-0">
+        <SelectTrigger
+          aria-busy={pending}
+          aria-label={label}
+          className="h-8 w-40 shrink-0"
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent align="end">

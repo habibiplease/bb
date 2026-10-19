@@ -14,6 +14,7 @@ const BATCH_LIMIT = 50;
 export function createService(bb: BbPluginApi) {
   let disposed = false;
   let running = false;
+  let configuring = Promise.resolve();
   bb.onDispose(() => {
     disposed = true;
   });
@@ -50,12 +51,23 @@ export function createService(bb: BbPluginApi) {
       deleteCount: count(result.delete),
     };
   }
-  async function configure(policy: Policy) {
-    requireActive();
-    await bb.storage.kv.set("policy", policySchema.parse(policy));
-    bb.rpc.experimental_invalidate(["state", "retention-preview"]);
-    return state();
+  function configure(update: Partial<Policy>) {
+    const write = configuring.then(async () => {
+      requireActive();
+      await bb.storage.kv.set(
+        "policy",
+        policySchema.parse({ ...(await readPolicy()), ...update }),
+      );
+      bb.rpc.experimental_invalidate(["state", "retention-preview"]);
+      return state();
+    });
+    configuring = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    return write;
   }
+
   async function sweep() {
     if (running || disposed) return;
     running = true;

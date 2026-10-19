@@ -134,7 +134,13 @@ function fixture(subPath = "host_test", metadataError: Error | null = null) {
       rpc: {
         state: readState,
         metadata,
-        configure: (input) => configure(policySchema.parse(input)),
+        configure: (input) =>
+          configure(
+            policySchema.parse({
+              ...state.policy,
+              ...storageRpc.configure.input.parse(input),
+            }),
+          ),
         hosts: reports,
         removeDevInstances: (input) =>
           remove(storageRpc.removeDevInstances.input.parse(input)),
@@ -255,7 +261,8 @@ it.each(["switch", "select"] as const)(
           : control.textContent,
       ).toBe(kind === "switch" ? "true" : "After 1 week"),
     );
-    await waitFor(() => expect(control.hasAttribute("disabled")).toBe(true));
+    expect(control.hasAttribute("disabled")).toBe(false);
+    await waitFor(() => expect(control.getAttribute("aria-busy")).toBe("true"));
     await act(async () => reject(new Error("Save rejected")));
     await waitFor(() =>
       expect(

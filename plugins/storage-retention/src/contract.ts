@@ -152,7 +152,14 @@ export const storageRpc = defineRpcContract({
   },
   configure: {
     invalidates: () => ["state", "retention-preview"],
-    input: policySchema,
+    input: z
+      .object({
+        archiveAfterDays: daysSchema.optional(),
+        deleteAfterDays: daysSchema.optional(),
+        deleteStorageOnArchive: z.boolean().optional(),
+        deleteDevDataOnCheckoutRemoval: z.boolean().optional(),
+      })
+      .strict(),
     output: stateSchema,
   },
 });

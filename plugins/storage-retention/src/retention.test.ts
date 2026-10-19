@@ -313,3 +313,25 @@ describe("retention plugin", () => {
     expect(host.harness.sdk.callsTo("threads.archive")).toHaveLength(1);
   });
 });
+
+it("preserves independent retention fields when settings writes overlap", async () => {
+  const host = createFakePluginHost({ pluginId: "storage-retention" });
+  try {
+    plugin(host.bb);
+    await Promise.all([
+      host.harness.callRpc("configure", { archiveAfterDays: 7 }),
+      host.harness.callRpc("configure", { deleteStorageOnArchive: true }),
+      host.harness.callRpc("configure", { archiveAfterDays: 30 }),
+    ]);
+    expect(await host.harness.callRpc("state", null)).toMatchObject({
+      policy: {
+        archiveAfterDays: 30,
+        deleteAfterDays: null,
+        deleteStorageOnArchive: true,
+        deleteDevDataOnCheckoutRemoval: false,
+      },
+    });
+  } finally {
+    await host.harness.dispose();
+  }
+});
