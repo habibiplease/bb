@@ -373,7 +373,11 @@ function useIssueMutations() {
     },
   });
   return {
-    isPending: state.isPending || assignees.isPending || labels.isPending,
+    pendingInputs: {
+      state: state.pendingInputs,
+      assignees: assignees.pendingInputs,
+      labels: labels.pendingInputs,
+    },
     setIssueState: (repo: string, number: number, next: "open" | "closed") =>
       state
         .mutate({ repo, number, state: next })
@@ -576,21 +580,22 @@ function AssigneeCell({ assignees }: { assignees: string[] }) {
 }
 
 function StatusCell({ item }: { item: Item }) {
-  const { setIssueState } = useIssueMutations();
-  const [pending, setPending] = useState(false);
+  const { setIssueState, pendingInputs } = useIssueMutations();
+  const pending = pendingInputs.state.some(
+    (input) => input.repo === item.repo && input.number === item.number,
+  );
   if (item.kind === "pr") {
     return <StateBadge kind="pr" state={item.state} />;
   }
   const change = (next: "open" | "closed") => {
     if ((item.state === "OPEN") === (next === "open")) return;
-    setPending(true);
-    setIssueState(item.repo, item.number, next)
-      .catch((error: unknown) => toast.error(errorText(error)))
-      .finally(() => setPending(false));
+    setIssueState(item.repo, item.number, next).catch((error: unknown) =>
+      toast.error(errorText(error)),
+    );
   };
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild disabled={pending}>
+      <DropdownMenuTrigger asChild>
         <Button
           size="sm"
           variant="ghost"
@@ -600,7 +605,7 @@ function StatusCell({ item }: { item: Item }) {
           aria-busy={pending}
         >
           <StateDot kind="issue" state={item.state} />
-          <span>{pending ? "…" : item.state.toLowerCase()}</span>
+          <span>{item.state.toLowerCase()}</span>
           <ChevronDownIcon />
         </Button>
       </DropdownMenuTrigger>
@@ -881,10 +886,10 @@ function AssigneePicker({
   repo,
   assignees,
   onToggle,
-  disabled,
+  pending,
 }: {
   repo: string;
-  disabled: boolean;
+  pending: boolean;
   assignees: string[];
   onToggle: (login: string, assigned: boolean) => void;
 }) {
@@ -904,9 +909,10 @@ function AssigneePicker({
 
   return (
     <DropdownMenu onOpenChange={(open) => open && setOpened(true)}>
-      <DropdownMenuTrigger asChild disabled={disabled}>
+      <DropdownMenuTrigger asChild>
         <Button
           size="sm"
+          aria-busy={pending}
           variant="ghost"
           className="h-6 px-2 text-xs text-muted-foreground"
         >
@@ -932,7 +938,6 @@ function AssigneePicker({
         ) : (
           ordered.map((login) => (
             <DropdownMenuCheckboxItem
-              disabled={disabled}
               key={login}
               checked={assignees.includes(login)}
               onCheckedChange={(checked) => onToggle(login, checked)}
@@ -957,10 +962,10 @@ function LabelPicker({
   repo,
   labels,
   onToggle,
-  disabled,
+  pending,
 }: {
   repo: string;
-  disabled: boolean;
+  pending: boolean;
   labels: string[];
   onToggle: (label: string, enabled: boolean) => void;
 }) {
@@ -981,9 +986,10 @@ function LabelPicker({
 
   return (
     <DropdownMenu onOpenChange={(open) => open && setOpened(true)}>
-      <DropdownMenuTrigger asChild disabled={disabled}>
+      <DropdownMenuTrigger asChild>
         <Button
           size="sm"
+          aria-busy={pending}
           variant="ghost"
           className="h-6 px-2 text-xs text-muted-foreground"
         >
@@ -1009,7 +1015,6 @@ function LabelPicker({
         ) : (
           ordered.map((label) => (
             <DropdownMenuCheckboxItem
-              disabled={disabled}
               key={label}
               checked={labels.includes(label)}
               onCheckedChange={(checked) => onToggle(label, checked === true)}
@@ -1046,7 +1051,7 @@ function IssueDetailView({
   const linkQuery = useLinks();
   const links = linkQuery.links;
   const { spawn, spawningKey } = useSpawn();
-  const { setIssueState, setAssignees, setLabels, isPending } =
+  const { setIssueState, setAssignees, setLabels, pendingInputs } =
     useIssueMutations();
   const [comment, setComment] = useState("");
   const [posting, setPosting] = useState(false);
@@ -1194,13 +1199,17 @@ function IssueDetailView({
           <div className="flex flex-col gap-2">
             <SidebarHeading>Status</SidebarHeading>
             <Select
-              disabled={isPending}
               value={detail.state === "OPEN" ? "open" : "closed"}
               onValueChange={(value) =>
                 changeState(value === "closed" ? "closed" : "open")
               }
             >
-              <SelectTrigger className="h-8 w-full text-sm">
+              <SelectTrigger
+                aria-busy={pendingInputs.state.some(
+                  (input) => input.repo === repo && input.number === number,
+                )}
+                className="h-8 w-full text-sm"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1222,7 +1231,9 @@ function IssueDetailView({
             <div className="flex items-center justify-between">
               <SidebarHeading>Assignees</SidebarHeading>
               <AssigneePicker
-                disabled={isPending}
+                pending={pendingInputs.assignees.some(
+                  (input) => input.repo === repo && input.number === number,
+                )}
                 repo={repo}
                 assignees={detail.assignees}
                 onToggle={toggleAssignee}
@@ -1247,7 +1258,9 @@ function IssueDetailView({
             <div className="flex items-center justify-between">
               <SidebarHeading>Labels</SidebarHeading>
               <LabelPicker
-                disabled={isPending}
+                pending={pendingInputs.labels.some(
+                  (input) => input.repo === repo && input.number === number,
+                )}
                 repo={repo}
                 labels={detail.labels}
                 onToggle={toggleLabel}

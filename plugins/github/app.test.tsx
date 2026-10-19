@@ -315,14 +315,15 @@ it.each(["labels", "assignees", "state"] as const)(
         fireEvent.click(control);
         fireEvent.click(await view.findByRole("option", { name: "Closed" }));
         await waitFor(() => expect(control.textContent).toContain("Closed"));
+        expect(control.hasAttribute("disabled")).toBe(false);
+        expect(control.getAttribute("aria-busy")).toBe("true");
         await act(async () => reject(new Error("Write failed")));
         await waitFor(() => expect(control.textContent).toContain("Open"));
       } else {
-        fireEvent.pointerDown(
-          view.getAllByRole("button", { name: "Edit" })[
-            field === "assignees" ? 0 : 1
-          ]!,
-        );
+        const control = view.getAllByRole("button", { name: "Edit" })[
+          field === "assignees" ? 0 : 1
+        ]!;
+        fireEvent.pointerDown(control);
         const option = await view.findByRole("menuitemcheckbox", {
           name: field === "labels" ? /bug/ : /mona/,
         });
@@ -330,6 +331,7 @@ it.each(["labels", "assignees", "state"] as const)(
         await waitFor(() =>
           expect(option.getAttribute("aria-checked")).toBe("true"),
         );
+        expect(control.hasAttribute("disabled")).toBe(false);
         await act(async () => reject(new Error("Write failed")));
         await waitFor(() =>
           expect(option.getAttribute("aria-checked")).toBe("false"),
