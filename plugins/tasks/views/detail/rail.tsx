@@ -56,6 +56,7 @@ export interface TaskPropertyUpdate {
   priority?: TaskPriority;
   dueDate?: string | null;
   labelIds?: string[];
+  previousLabelIds?: string[];
 }
 
 interface TaskPropertiesProps {
@@ -229,7 +230,7 @@ function LabelsMenu({
     const next = task.labelIds.includes(labelId)
       ? task.labelIds.filter((id) => id !== labelId)
       : [...task.labelIds, labelId];
-    onUpdate({ labelIds: next });
+    onUpdate({ labelIds: next, previousLabelIds: task.labelIds });
   };
 
   const createLabel = async (name: string) => {
@@ -241,7 +242,10 @@ function LabelsMenu({
         name,
         color: DEFAULT_COLOR,
       });
-      onUpdate({ labelIds: [...task.labelIds, label.id] });
+      onUpdate({
+        labelIds: [...task.labelIds, label.id],
+        previousLabelIds: task.labelIds,
+      });
       setQuery("");
     } finally {
       setCreating(false);

@@ -273,6 +273,7 @@ const updateTaskInputSchema = z
     dueDate: dueDateSchema.nullable().optional(),
     parentTaskId: idSchema.nullable().optional(),
     labelIds: taskLabelsSchema.optional(),
+    previousLabelIds: taskLabelsSchema.optional(),
     authorName: nonBlankStringSchema.default("You"),
   })
   .strict()
@@ -286,6 +287,11 @@ const updateTaskInputSchema = z
       input.parentTaskId !== undefined ||
       input.labelIds !== undefined,
     { message: "at least one task field must be updated" },
+  )
+  .refine(
+    (input) =>
+      input.previousLabelIds === undefined || input.labelIds !== undefined,
+    { message: "previousLabelIds requires labelIds" },
   );
 
 const updateProjectInputSchema = z

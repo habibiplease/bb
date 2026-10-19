@@ -260,7 +260,7 @@ export function TaskContextMenu({
     const labelIds = task.labelIds.includes(labelId)
       ? task.labelIds.filter((id) => id !== labelId)
       : [...task.labelIds, labelId];
-    onEdit(task, { labelIds });
+    onEdit(task, { labelIds, previousLabelIds: task.labelIds });
   };
   return (
     <ContextMenu>

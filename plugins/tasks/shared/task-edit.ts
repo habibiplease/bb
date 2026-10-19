@@ -1,3 +1,4 @@
+import { applyLabelChange } from "./label-change.js";
 import type {
   TaskSummary as Task,
   TaskPriority,
@@ -9,6 +10,7 @@ export interface TaskEdit {
   priority?: TaskPriority;
   dueDate?: string | null;
   labelIds?: string[];
+  previousLabelIds?: string[];
   position?: number;
   title?: string;
 }
@@ -23,7 +25,15 @@ export function applyEdit<Value extends Task>(
     ...(edit.status !== undefined ? { status: edit.status } : {}),
     ...(edit.priority !== undefined ? { priority: edit.priority } : {}),
     ...(edit.dueDate !== undefined ? { dueDate: edit.dueDate } : {}),
-    ...(edit.labelIds !== undefined ? { labelIds: edit.labelIds } : {}),
+    ...(edit.labelIds !== undefined
+      ? {
+          labelIds: applyLabelChange(
+            task.labelIds,
+            edit.labelIds,
+            edit.previousLabelIds,
+          ),
+        }
+      : {}),
     ...(edit.position !== undefined ? { position: edit.position } : {}),
     ...(edit.title !== undefined ? { title: edit.title } : {}),
   };

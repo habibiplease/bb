@@ -212,7 +212,7 @@ export function BoardView({ projectId }: BoardViewProps) {
     mutate: boardMoveMutation,
     pendingInputs,
     error: writeError,
-  } = useTaskMutationState("boardMove", { boardTasks: board.data?.tasks });
+  } = useTaskMutationState("boardMove", { tasks: board.data?.tasks });
   const columns = useMemo(
     () =>
       board.data === undefined ? undefined : groupColumns(board.data.tasks),

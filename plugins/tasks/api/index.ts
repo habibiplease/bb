@@ -1,3 +1,4 @@
+import { applyLabelChange } from "../shared/label-change.js";
 import { experimental_PluginRpcRefusal } from "@get-bb/plugin-sdk";
 import type {
   BbPluginApi,
@@ -753,14 +754,21 @@ export function registerHandlers(
           ? current.parentTaskId
           : input.parentTaskId;
       validateTaskParent(store, current.projectId, parentTaskId, current.id);
-      if (input.labelIds) {
-        validateTaskLabels(store, current.projectId, input.labelIds);
-      }
 
       const result = store.transaction(() => {
         const beforeLabelIds = store.tasks
           .listTaskLabels(current.id)
           .map((link) => link.labelId);
+        const labelIds =
+          input.labelIds === undefined
+            ? undefined
+            : applyLabelChange(
+                beforeLabelIds,
+                input.labelIds,
+                input.previousLabelIds,
+              );
+        if (labelIds !== undefined)
+          validateTaskLabels(store, current.projectId, labelIds);
         const updated = store.tasks.updateTask(current.id, {
           title: input.title,
           description: input.description,
@@ -769,9 +777,8 @@ export function registerHandlers(
           dueDate: input.dueDate,
           parentTaskId: input.parentTaskId,
         });
-        if (input.labelIds) {
-          replaceTaskLabels(store, current.id, input.labelIds);
-        }
+        if (labelIds !== undefined)
+          replaceTaskLabels(store, current.id, labelIds);
 
         const bodies: string[] = [];
         if (updated.status !== current.status) {
@@ -791,7 +798,7 @@ export function registerHandlers(
               : `Due date changed to ${updated.dueDate} by ${input.authorName}`,
           );
         }
-        if (input.labelIds && labelsChanged(beforeLabelIds, input.labelIds)) {
+        if (labelIds !== undefined && labelsChanged(beforeLabelIds, labelIds)) {
           bodies.push(labelChangeBody(store, current.id, input.authorName));
         }
         writeSystemComments(store, current.id, input.authorName, bodies);
@@ -918,8 +925,13 @@ export function registerHandlers(
     },
     deleteLabel(input) {
       const label = store.tasks.getLabel(input.labelId);
+      const tasks = store.tasks.listTasks({ labelIds: [input.labelId] });
       const deleted = store.tasks.deleteLabel(input.labelId);
-      if (deleted && label) publishProjectsChanged(bb, label.projectId);
+      if (deleted && label) {
+        publishProjectsChanged(bb, label.projectId);
+        for (const task of tasks)
+          publishTasksChanged(bb, task.id, task.projectId);
+      }
       return { deleted };
     },
     listLabels(input) {

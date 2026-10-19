@@ -3,13 +3,14 @@ import {
   tasksRpcContract,
   type TasksRpcContract,
   type TaskSummary,
+  type Task,
 } from "../shared/contract.js";
 import { TASK_POSITION_STEP } from "../shared/position.js";
 
 export interface TaskMutationScope {
   projectId?: string;
   taskId?: string;
-  boardTasks?: readonly TaskSummary[];
+  tasks?: readonly TaskSummary[];
 }
 
 export function predictTaskMutation(
@@ -124,6 +125,30 @@ export function predictTaskMutation(
       cache.updateKey("getLabelsKeyed", scope.projectId, (current) =>
         current.filter((label) => label.id !== labelId),
       );
+      for (const task of scope.tasks ?? []) {
+        cache.updateKey("getTasksKeyed", task.id, (current) =>
+          current === null
+            ? null
+            : {
+                ...current,
+                labelIds: current.labelIds.filter((id) => id !== labelId),
+              },
+        );
+        const update = (current: { task: Task | null }) => ({
+          ...current,
+          task:
+            current.task === null
+              ? null
+              : {
+                  ...current.task,
+                  labelIds: current.task.labelIds.filter(
+                    (id) => id !== labelId,
+                  ),
+                },
+        });
+        cache.update("getTask", { taskId: task.id }, update);
+        cache.update("getTaskByKey", { taskKey: task.key }, update);
+      }
       break;
     }
     case "deleteAttachment": {
@@ -143,7 +168,7 @@ export function predictTaskMutation(
     }
     case "boardMove": {
       const update = tasksRpcContract.boardMove.input.parse(input);
-      const rows = scope.boardTasks;
+      const rows = scope.tasks;
       const before = rows?.find(
         (task) => task.id === update.beforeTaskId,
       )?.position;

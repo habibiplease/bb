@@ -1,6 +1,6 @@
 import { useTasksRpc } from "../../shell/data.js";
 import { useMemo, useState } from "react";
-import type { Folder, Label, Preset } from "../../shared/contract.js";
+import type { Folder, Label, Preset, Task } from "../../shared/contract.js";
 import { errorMessage } from "../../shared/errors.js";
 import {
   listAllTasks,
@@ -125,21 +125,22 @@ function LabelsSection() {
     useTaskMutationState("updateLabel", {
       projectId: projectId ?? undefined,
     });
-  const { mutate: deleteLabelMutation, pendingInputs: deletingLabels } =
-    useTaskMutationState("deleteLabel", {
-      projectId: projectId ?? undefined,
-    });
   const [editingId, setEditingId] = useState<string | null>(null);
   const { error, run } = useActionError();
   const [confirmDelete, setConfirmDelete] = useState<{
     label: Label;
-    usedBy: number;
+    tasks: Task[];
   } | null>(null);
 
+  const { mutate: deleteLabelMutation, pendingInputs: deletingLabels } =
+    useTaskMutationState("deleteLabel", {
+      projectId: projectId ?? undefined,
+      tasks: confirmDelete?.tasks,
+    });
   const askDelete = (label: Label) =>
     run(async () => {
       const tasks = await listAllTasks(rpc, { labelIds: [label.id] });
-      setConfirmDelete({ label, usedBy: tasks.length });
+      setConfirmDelete({ label, tasks });
     });
 
   if (projectList.length === 0) {
@@ -273,8 +274,8 @@ function LabelsSection() {
           <ConfirmDeleteDialogContent
             title={`Delete label “${confirmDelete.label.name}”?`}
             description={
-              confirmDelete.usedBy > 0
-                ? `Used by ${confirmDelete.usedBy} task${confirmDelete.usedBy > 1 ? "s" : ""} — removing it detaches them.`
+              confirmDelete.tasks.length > 0
+                ? `Used by ${confirmDelete.tasks.length} task${confirmDelete.tasks.length > 1 ? "s" : ""} — removing it detaches them.`
                 : "This label isn't used by any tasks."
             }
             confirmLabel="Delete label"

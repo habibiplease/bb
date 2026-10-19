@@ -6,7 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { experimental_PluginRpcRefusal } from "@get-bb/plugin-sdk";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import {
@@ -21,6 +21,7 @@ const app = await loadPluginApp(() => import("../app"));
 const disposals: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   cleanup();
+  vi.unstubAllGlobals();
   for (const dispose of disposals.splice(0).reverse()) await dispose();
 });
 
@@ -569,4 +570,42 @@ it("moves a board card immediately and rolls back a refused drop", async () => {
       ?.getAttribute("aria-busy"),
   ).toBe("false");
   await slot.findByText(/Move refused/);
+});
+
+
+it("rolls back only the refused label while another label edit is pending", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  const server = setup();
+  const task = await server.create("Label draft");
+  const first = server.store.tasks.createLabel({ projectId: server.project.id, name: "First label", color: "blue" });
+  const second = server.store.tasks.createLabel({ projectId: server.project.id, name: "Second label", color: "green" });
+  const writes = [deferred<never>(), deferred<never>()];
+  let calls = 0;
+  server.options.rpc = { ...server.options.rpc, updateTask: () => writes[calls++]!.promise };
+  const slot = server.connect(renderSlot(app.navPanels[0]!, { subPath: `task/${task.key}` }, server.options));
+  fireEvent.click((await slot.findAllByRole("button", { name: "Edit labels" }))[0]!);
+  fireEvent.click(await slot.findByRole("option", { name: first.name }));
+  await waitFor(() => expect(slot.getAllByText(first.name).length).toBeGreaterThan(1));
+  fireEvent.click(slot.getByRole("option", { name: second.name }));
+  await waitFor(() => expect(slot.getAllByText(second.name).length).toBeGreaterThan(1));
+  await act(async () => writes[0]!.reject(new experimental_PluginRpcRefusal({ code: "conflict", message: "First label refused" })));
+  await waitFor(() => {
+    expect(slot.getAllByText(first.name)).toHaveLength(1);
+    expect(slot.getAllByText(second.name).length).toBeGreaterThan(1);
+  });
+  await act(async () => writes[1]!.reject(new experimental_PluginRpcRefusal({ code: "conflict", message: "Second label refused" })));
+  await waitFor(() => expect(slot.getAllByText(second.name)).toHaveLength(1));
+});
+
+it("applies a label intent without copying an unconfirmed earlier label", async () => {
+  const server = setup();
+  const task = await server.create("Label intent");
+  const first = server.store.tasks.createLabel({ projectId: server.project.id, name: "Failed label", color: "blue" });
+  const second = server.store.tasks.createLabel({ projectId: server.project.id, name: "Saved label", color: "green" });
+  const result = tasksRpcContract.updateTask.output.parse(await server.write("updateTask", {
+    taskId: task.id,
+    labelIds: [first.id, second.id],
+    previousLabelIds: [first.id],
+  }));
+  expect(result.task.labelIds).toEqual([second.id]);
 });
