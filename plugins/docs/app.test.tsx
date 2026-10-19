@@ -176,10 +176,12 @@ function listNotesResultForVault(
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const preview = {
@@ -902,7 +904,8 @@ describe("Docs nav panel", () => {
     });
   });
 
-  it("reorders files by dragging within a folder", async () => {
+  it("reorders files instantly and rolls back a failed write", async () => {
+    const write = deferred<{ paths: string[] }>();
     const slot = renderSlot(
       navigationRegistration,
       { subPath: "personal" },
@@ -923,7 +926,7 @@ describe("Docs nav panel", () => {
                 modifiedAtMs: 1,
               },
             ]),
-          reorderFiles: () => ({ paths: ["second.md", "first.md"] }),
+          reorderFiles: () => write.promise,
         },
       },
     );
@@ -946,6 +949,13 @@ describe("Docs nav panel", () => {
         },
       });
     });
+    const titles = () =>
+      slot
+        .getAllByRole("button", { name: /^(First|Second)$/ })
+        .map((row) => row.textContent);
+    await waitFor(() => expect(titles()).toEqual(["Second", "First"]));
+    await act(async () => write.reject(new Error("Reorder refused")));
+    await waitFor(() => expect(titles()).toEqual(["First", "Second"]));
   });
 
   it("moves a file when it is dropped onto a folder", async () => {
@@ -1698,4 +1708,102 @@ it("keeps the focused editor and draft while replacing and expiring preview leas
     ).not.toContain("/preview/two"),
   );
   expect(editor.textContent).toContain("Draft body");
+});
+
+it("renders a revisited document from cache while revalidating and preserves a saving draft", async () => {
+  const reread = deferred<{ content: string; sha256: string }>();
+  const write = deferred<{ outcome: "written"; sha256: string }>();
+  let revisiting = false;
+  let saved = false;
+  const Panel = docsRegistration.component;
+  const slot = renderSlot(
+    docsRegistration,
+    { subPath: "personal/one.md" },
+    {
+      rpc: {
+        listNotes: () => listNotesResult([]),
+        preparePreview: () => preview,
+        readNote: (raw: unknown) => {
+          const { path } = z.object({ path: z.string() }).parse(raw);
+          if (path === "two.md") return { content: "Second", sha256: "two" };
+          if (revisiting && !saved) return reread.promise;
+          return {
+            content: saved ? "Saved draft" : "Cached document",
+            sha256: saved ? "saved" : "one",
+          };
+        },
+        saveNote: async () => {
+          const result = await write.promise;
+          saved = true;
+          return result;
+        },
+        renameToTitle: () => ({ path: "one.md" }),
+      },
+    },
+  );
+  const first = await slot.findByRole("textbox", { name: "Document content" });
+  expect(first.textContent).toBe("Cached document");
+  slot.rerender(<Panel subPath="personal/two.md" />);
+  await waitFor(() =>
+    expect(
+      slot.getByRole("textbox", { name: "Document content" }).textContent,
+    ).toBe("Second"),
+  );
+  revisiting = true;
+  slot.rerender(<Panel subPath="personal/one.md" />);
+  const editor = slot.getByRole("textbox", { name: "Document content" });
+  expect(editor.textContent).toBe("Cached document");
+  editor.innerHTML = "<p>Saved draft</p>";
+  fireEvent.input(editor);
+  await waitFor(
+    () =>
+      expect(slot.rpcCalls.some((call) => call.method === "saveNote")).toBe(
+        true,
+      ),
+    { timeout: 2000 },
+  );
+  slot.rerender(<Panel subPath="personal/two.md" />);
+  await slot.findByRole("textbox", { name: "Document content" });
+  slot.rerender(<Panel subPath="personal/one.md" />);
+  const returned = slot.getByRole("textbox", { name: "Document content" });
+  expect(returned.textContent).toBe("Saved draft");
+  await act(async () => {
+    reread.resolve({ content: "Cached document", sha256: "one" });
+  });
+  expect(returned.textContent).toBe("Saved draft");
+  await act(async () => write.resolve({ outcome: "written", sha256: "saved" }));
+  expect(slot.getByRole("textbox", { name: "Document content" })).toBe(
+    returned,
+  );
+  expect(returned.textContent).toBe("Saved draft");
+});
+
+it("keeps a failed save visible without replacing the draft with an unchanged cached read", async () => {
+  const write = deferred<{ outcome: "written"; sha256: string }>();
+  const slot = renderSlot(
+    docsRegistration,
+    { subPath: "personal/save-error.md" },
+    {
+      rpc: {
+        listNotes: () => listNotesResult([]),
+        readNote: () => ({ content: "Original", sha256: "original" }),
+        preparePreview: () => preview,
+        saveNote: () => write.promise,
+      },
+    },
+  );
+  const editor = await slot.findByRole("textbox", { name: "Document content" });
+  editor.innerHTML = "<p>Unsaved draft</p>";
+  fireEvent.input(editor);
+  await waitFor(
+    () =>
+      expect(slot.rpcCalls.some((call) => call.method === "saveNote")).toBe(
+        true,
+      ),
+    { timeout: 2000 },
+  );
+  await act(async () => write.reject(new Error("Save refused")));
+  await slot.findByText("Save refused");
+  expect(slot.getByRole("textbox", { name: "Document content" })).toBe(editor);
+  expect(editor.textContent).toBe("Unsaved draft");
 });

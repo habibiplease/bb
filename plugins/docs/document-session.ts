@@ -1,4 +1,14 @@
-import { useEffect, useMemo, useSyncExternalStore, useState } from "react";
+import {
+  createContext,
+  createElement,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useSyncExternalStore,
+  useState,
+  type ReactNode,
+} from "react";
 import { experimental_useRpcQuery, useRpc } from "@get-bb/plugin-sdk/app";
 import type { docsRpcContract } from "./server.js";
 import { useDocsRpc } from "./rpc.js";
@@ -48,7 +58,8 @@ class DocumentConflict extends Error {
   }
 }
 
-function createSession(io: DocumentIO) {
+function createSession(initialIO: DocumentIO) {
+  let io = initialIO;
   let state: DocumentState = {
     loaded: false,
     content: "",
@@ -190,11 +201,18 @@ function createSession(io: DocumentIO) {
       .finally(() => set({ busy: false }));
   };
   return {
+    setIO: (next: DocumentIO) => {
+      io = next;
+    },
     receive,
     receiveError,
     discard: () => set({ draft: savedDraft() }),
     setPreview: (previewBaseUrl: string) => set({ previewBaseUrl }),
-    initialize: (content: string) => set({ content, draft: content }),
+    initialize: (content: string) =>
+      set({
+        ...(state.dirty || state.saving ? {} : { content }),
+        draft: content,
+      }),
     reload: async () => {
       if (timer) clearTimeout(timer);
       timer = null;
@@ -324,24 +342,15 @@ function useLiveSession(
     method: "readDocument",
     input: input ?? { vaultId: "", path: "" },
     enabled: input !== undefined,
+    refetchOnMount: "always",
   });
   const previewBaseUrl = useLeaseUrl(query.data?.preview);
-  const refetch = query.refetch;
-  useEffect(() => {
-    if (input !== undefined && query.data !== undefined) void refetch();
-    // oxlint-disable-next-line react/exhaustive-deps
-  }, [session, refetch]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (input === undefined) return;
     session.setPreview(previewBaseUrl);
     const error = query.error;
     if (error) session.receiveError(error);
-    else if (
-      !query.isFetching &&
-      query.data &&
-      !result.state.saving &&
-      !result.state.busy
-    ) {
+    else if (query.data && !result.state.saving && !result.state.busy) {
       session.receive({
         content: query.data.content,
         sha256: query.data.sha256,
@@ -355,7 +364,6 @@ function useLiveSession(
     input,
     query.data,
     query.error,
-    query.isFetching,
     previewBaseUrl,
     proposals,
     result.state.saving,
@@ -379,8 +387,46 @@ function useLiveSession(
       };
 }
 
+const savedSessionContext = createContext<Map<
+  string,
+  ReturnType<typeof createSession>
+> | null>(null);
+
+export function SavedDocumentSessions({ children }: { children: ReactNode }) {
+  const [sessions] = useState(
+    () => new Map<string, ReturnType<typeof createSession>>(),
+  );
+  return createElement(
+    savedSessionContext.Provider,
+    { value: sessions },
+    children,
+  );
+}
+
 export function useSavedDocument(io: DocumentIO) {
-  const session = useMemo(() => createSession(io), [io]);
+  const sessions = useContext(savedSessionContext);
+  const session = useMemo(() => {
+    if (sessions === null || io.liveRead === undefined)
+      return createSession(io);
+    const key = JSON.stringify([io.liveRead.vaultId, io.liveRead.path]);
+    const session = sessions.get(key) ?? createSession(io);
+    session.setIO(io);
+    sessions.delete(key);
+    sessions.set(key, session);
+    for (const [cachedKey, cached] of sessions) {
+      if (sessions.size <= 20) break;
+      const state = cached.getSnapshot();
+      if (
+        cachedKey !== key &&
+        !cached.hasSubscribers() &&
+        !state.dirty &&
+        !state.saving &&
+        !state.busy
+      )
+        sessions.delete(cachedKey);
+    }
+    return session;
+  }, [io, sessions]);
   return useLiveSession(session, io.liveRead, false);
 }
 

@@ -28,6 +28,7 @@ import { createProposalDiff, proposalDiffKey } from "./proposal-diff.js";
 import {
   useDocumentSession,
   useSavedDocument,
+  SavedDocumentSessions,
   usePreviewLease,
   type DocumentIO,
 } from "./document-session.js";
@@ -583,22 +584,28 @@ function TiptapEditor(props: {
     if (!editor) return;
     const current = serializeRef.current();
     const next = value ?? current;
-    const leaseChanged = baseUrlRef.current !== previewBaseUrl;
+    const previousBaseUrl = baseUrlRef.current;
+    const leaseChanged = previousBaseUrl !== previewBaseUrl;
     baseUrlRef.current = previewBaseUrl;
-    if (leaseChanged || (next !== sourceRef.current && next !== current)) {
+    const body = parseMarkdownDocument(next).body;
+    const previewChanged =
+      leaseChanged &&
+      displayMarkdown(body, previousBaseUrl, notePath) !==
+        displayMarkdown(body, previewBaseUrl, notePath);
+    if (previewChanged || (next !== sourceRef.current && next !== current)) {
       const { from, to } = editor.state.selection;
-      const focused = editor.isFocused;
+      const scrollTop = rootRef.current?.scrollTop ?? 0;
       blocksRef.current = loadMarkdownBlocks(
         editor,
-        parseMarkdownDocument(next).body,
+        body,
         (source) => displayMarkdown(source, baseUrlRef.current, notePath),
-        !leaseChanged,
+        !previewChanged,
       );
-      if (focused)
-        editor.commands.setTextSelection({
-          from: Math.min(from, editor.state.doc.content.size),
-          to: Math.min(to, editor.state.doc.content.size),
-        });
+      editor.commands.setTextSelection({
+        from: Math.min(from, editor.state.doc.content.size),
+        to: Math.min(to, editor.state.doc.content.size),
+      });
+      if (rootRef.current) rootRef.current.scrollTop = scrollTop;
     }
     sourceRef.current = next;
   }, [value, notePath, previewBaseUrl]);
@@ -2275,7 +2282,11 @@ function NotesWorkspace({
 }
 
 function NotesPanel(props: PluginNavPanelProps) {
-  return <NotesWorkspace {...props} navigationOnly={false} />;
+  return (
+    <SavedDocumentSessions>
+      <NotesWorkspace {...props} navigationOnly={false} />
+    </SavedDocumentSessions>
+  );
 }
 
 function NotesNavigationPanel(props: PluginNavPanelProps) {
