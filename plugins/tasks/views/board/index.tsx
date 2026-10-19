@@ -1,5 +1,6 @@
 import {
   memo,
+  useMemo,
   useEffect,
   useRef,
   useState,
@@ -13,11 +14,10 @@ import {
   type TaskStatus,
   type TaskThread,
 } from "../../shared/contract.js";
-import { useTaskMutation } from "../../shell/data.js";
+import { useTaskMutationState } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
 import { NewTaskDialog } from "../manage/new-task-dialog.js";
 import {
-  applyBoardMove,
   BOARD_STATUSES,
   dropIndexForPointer,
   dropNeighborsForIndex,
@@ -87,6 +87,7 @@ interface TaskCardProps {
   task: Task;
   labelsById: Map<string, Label>;
   meta: BoardCardMeta;
+  pending?: boolean;
   ghost?: boolean;
   dragging?: boolean;
   actions?: RefObject<CardActions | null>;
@@ -97,6 +98,7 @@ const TaskCard = memo(
     task,
     labelsById,
     meta,
+    pending = false,
     ghost = false,
     dragging = false,
     actions,
@@ -111,6 +113,7 @@ const TaskCard = memo(
           else actions?.current?.cards.delete(task.id);
         }}
         data-task-key={task.key}
+        aria-busy={pending}
         onPointerDown={(event) => actions?.current?.pointerDown(event, task)}
         onClick={() => actions?.current?.open(task)}
         className={cn(
@@ -119,6 +122,7 @@ const TaskCard = memo(
             ? "rotate-2 shadow-md"
             : "cursor-pointer touch-none hover:border-input",
           dragging && "opacity-40",
+          pending && "opacity-70",
         )}
       >
         <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
@@ -164,6 +168,7 @@ const TaskCard = memo(
     previous.actions === next.actions &&
     previous.task === next.task &&
     previous.labelsById === next.labelsById &&
+    previous.pending === next.pending &&
     previous.ghost === next.ghost &&
     previous.dragging === next.dragging &&
     previous.meta.attachmentCount === next.meta.attachmentCount &&
@@ -200,17 +205,19 @@ interface BoardViewProps {
 }
 
 export function BoardView({ projectId }: BoardViewProps) {
-  const boardMoveMutation = useTaskMutation("boardMove");
   const navigation = useTasksNavigation();
   const board = useBoardData(projectId);
 
-  const [columns, setColumns] = useState<ColumnMap | undefined>(undefined);
-  useEffect(() => {
-    setColumns(undefined);
-  }, [projectId]);
-  useEffect(() => {
-    if (board.data) setColumns(groupColumns(board.data.tasks));
-  }, [board.data]);
+  const {
+    mutate: boardMoveMutation,
+    pendingInputs,
+    error: writeError,
+  } = useTaskMutationState("boardMove", { boardTasks: board.data?.tasks });
+  const columns = useMemo(
+    () =>
+      board.data === undefined ? undefined : groupColumns(board.data.tasks),
+    [board.data],
+  );
   const columnsRef = useRef(columns);
   columnsRef.current = columns;
 
@@ -271,14 +278,13 @@ export function BoardView({ projectId }: BoardViewProps) {
       taskId,
       dropIndex,
     );
-    setColumns(applyBoardMove(current, taskId, toStatus, dropIndex));
     void boardMoveMutation({
       taskId,
       status: toStatus,
       beforeTaskId: neighbors.beforeTaskId,
       afterTaskId: neighbors.afterTaskId,
       authorName: "You",
-    }).catch(() => board.refresh());
+    }).catch(() => undefined);
   };
 
   const handleCardPointerDown = (
@@ -415,6 +421,7 @@ export function BoardView({ projectId }: BoardViewProps) {
           task={task}
           labelsById={labelsById}
           meta={metaByTaskId.get(task.id) ?? EMPTY_META}
+          pending={pendingInputs.some((input) => input.taskId === task.id)}
           dragging={drag?.taskId === task.id}
           actions={actions}
         />,
@@ -466,12 +473,14 @@ export function BoardView({ projectId }: BoardViewProps) {
         drag !== null && "cursor-grabbing",
       )}
     >
-      {board.error ? (
+      {board.error || writeError ? (
         <div
           role="alert"
           className="flex items-center gap-2 p-3 text-sm text-destructive"
         >
-          Failed to load the board: {board.error}
+          {board.error
+            ? `Failed to load the board: ${board.error}`
+            : `Failed to move task: ${writeError?.message}`}
           <Button size="sm" variant="outline" onClick={board.refresh}>
             Retry
           </Button>

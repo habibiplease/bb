@@ -128,31 +128,25 @@ export function AttachmentsGrid({
   attachments,
   onRemove,
   onError,
+  pendingIds = [],
 }: {
+  pendingIds?: readonly string[];
   attachments: Attachment[];
   onRemove: (attachment: Attachment) => Promise<void>;
   onError: (message: string) => void;
 }) {
   const [lightbox, setLightbox] = useState<Attachment | null>(null);
   const [confirm, setConfirm] = useState<Attachment | null>(null);
-  const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
 
   const requestRemove = (attachment: Attachment) => setConfirm(attachment);
 
   const performRemove = async (attachment: Attachment) => {
     setConfirm(null);
     setLightbox((current) => (current?.id === attachment.id ? null : current));
-    setPending((current) => new Set(current).add(attachment.id));
     try {
       await onRemove(attachment);
     } catch (error) {
       onError(errorMessage(error));
-    } finally {
-      setPending((current) => {
-        const next = new Set(current);
-        next.delete(attachment.id);
-        return next;
-      });
     }
   };
 
@@ -162,7 +156,7 @@ export function AttachmentsGrid({
   const images = attachments.filter((attachment) => attachment.isImage);
 
   const removeButton = (attachment: Attachment, variant: "image" | "file") => {
-    const busy = pending.has(attachment.id);
+    const busy = pendingIds.includes(attachment.id);
     const base =
       variant === "image"
         ? "absolute right-1 top-1 z-10 rounded-full bg-black/55 p-0.5 text-white transition-colors hover:bg-black/70 disabled:opacity-70"
@@ -171,12 +165,12 @@ export function AttachmentsGrid({
       <button
         type="button"
         aria-label={`Remove ${attachment.fileName}`}
-        disabled={busy}
+        aria-busy={busy}
         className={base}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (!busy) requestRemove(attachment);
+          requestRemove(attachment);
         }}
       >
         {busy ? <RemovalSpinner /> : <Icon name="X" className="size-3" />}

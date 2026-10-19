@@ -120,7 +120,7 @@ function ThreadCard({
         type="button"
         aria-label={`Detach ${thread.title}`}
         title="Detach from task"
-        disabled={busy}
+        aria-busy={busy}
         className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:opacity-70"
         onClick={onDetach}
       >
@@ -165,7 +165,8 @@ export function DispatchControl({
     DelegationRpcContract,
     "delegate"
   >({ method: "delegate" }).mutate;
-  const savePreset = useSavePresetDraft();
+  const { save: savePreset, pendingInputs: pendingPresets } =
+    useSavePresetDraft();
   const [dispatching, setDispatching] = useState(false);
   const [lastPresetId, setLastPresetId] = useState(loadLastPresetId);
   const [createDialogKey, setCreateDialogKey] = useState<number | null>(null);
@@ -203,6 +204,7 @@ export function DispatchControl({
         </Button>
         {createDialogKey !== null ? (
           <PresetDialog
+            pending={pendingPresets.length > 0}
             key={createDialogKey}
             open
             onOpenChange={(open) => {
@@ -277,6 +279,7 @@ export function DispatchControl({
 }
 
 interface ThreadsSectionProps {
+  pendingIds?: readonly string[];
   threads: TaskThread[];
   pullRequests: TaskPullRequest[] | undefined;
   unavailableThreadIds: string[];
@@ -290,22 +293,15 @@ export function ThreadsSection({
   unavailableThreadIds,
   onDetach,
   onError,
+  pendingIds = [],
 }: ThreadsSectionProps) {
   const [confirm, setConfirm] = useState<TaskThread | null>(null);
-  const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
 
   const performDetach = async (thread: TaskThread) => {
-    setPending((current) => new Set(current).add(thread.id));
     try {
       await onDetach(thread);
     } catch (error) {
       onError(errorMessage(error));
-    } finally {
-      setPending((current) => {
-        const next = new Set(current);
-        next.delete(thread.id);
-        return next;
-      });
     }
   };
 
@@ -332,7 +328,7 @@ export function ThreadsSection({
           thread={thread}
           pullRequest={pullRequestByThread.get(thread.threadId)}
           pullRequestUnavailable={unavailable.has(thread.threadId)}
-          busy={pending.has(thread.id)}
+          busy={pendingIds.includes(thread.threadId)}
           onDetach={() => setConfirm(thread)}
         />
       ))}

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   experimental_PermissionModePicker as PermissionModePicker,
   experimental_ProviderModelPicker as ProviderModelPicker,
@@ -8,7 +8,11 @@ import type { Preset, PresetPermissionMode } from "../../shared/contract.js";
 import { PRESET_ENVIRONMENT_KINDS } from "../../shared/contract.js";
 import { errorMessage } from "../../shared/errors.js";
 
-import { useTaskRead, useTaskMutation } from "../../shell/data.js";
+import {
+  useTaskRead,
+  useTaskMutation,
+  useTaskMutationState,
+} from "../../shell/data.js";
 import {
   Dialog,
   DialogContent,
@@ -140,7 +144,9 @@ export function PresetDialog({
   onOpenChange,
   editing,
   onSave,
+  pending = false,
 }: {
+  pending?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editing: Preset | null;
@@ -151,6 +157,8 @@ export function PresetDialog({
   );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const latestDraft = useRef(draft);
+  latestDraft.current = draft;
   const set = <K extends keyof PresetDraft>(key: K, value: PresetDraft[K]) =>
     setDraft((current) => ({ ...current, [key]: value }));
 
@@ -165,7 +173,7 @@ export function PresetDialog({
     draft.name.trim() !== "" &&
     draft.providerId.trim() !== "" &&
     draft.modelId.trim() !== "" &&
-    !submitting;
+    (editing !== null || !submitting);
   const pickerValue: ExperimentalProviderModelPickerValue = {
     providerId: draft.providerId,
     model: draft.modelId,
@@ -332,11 +340,14 @@ export function PresetDialog({
           <Button
             size="sm"
             disabled={!canSubmit}
+            aria-busy={editing === null ? submitting : pending}
             onClick={() => {
               setSubmitting(true);
               setError(null);
               onSave(draft)
-                .then(() => onOpenChange(false))
+                .then(() => {
+                  if (latestDraft.current === draft) onOpenChange(false);
+                })
                 .catch((saveError: unknown) =>
                   setError(errorMessage(saveError)),
                 )
@@ -353,10 +364,11 @@ export function PresetDialog({
 
 export function useSavePresetDraft() {
   const create = useTaskMutation("createPreset");
-  const update = useTaskMutation("updatePreset");
-  return useCallback(
+  const update = useTaskMutationState("updatePreset");
+  const save = useCallback(
     (editing: Preset | null, draft: PresetDraft) =>
-      savePresetDraft({ create, update }, editing, draft),
-    [create, update],
+      savePresetDraft({ create, update: update.mutate }, editing, draft),
+    [create, update.mutate],
   );
+  return { save, pendingInputs: update.pendingInputs };
 }

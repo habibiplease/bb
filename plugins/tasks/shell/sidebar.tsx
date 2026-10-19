@@ -180,7 +180,8 @@ export function TasksSidebar({
   const [collapsedFolders, setCollapsedFolders] = useState<ReadonlySet<string>>(
     new Set(),
   );
-  const savePreset = useSavePresetDraft();
+  const { save: savePreset, pendingInputs: pendingPresets } =
+    useSavePresetDraft();
   const [presetDialog, setPresetDialog] = useState<{
     key: number;
     editing: Preset | null;
@@ -361,6 +362,7 @@ export function TasksSidebar({
       </div>
       {presetDialog ? (
         <PresetDialog
+          pending={pendingPresets.length > 0}
           key={presetDialog.key}
           open
           onOpenChange={(open) => {

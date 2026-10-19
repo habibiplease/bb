@@ -1,3 +1,4 @@
+import { predictTaskMutation, type TaskMutationScope } from "./optimistic.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   useRpc,
@@ -50,11 +51,21 @@ export function useTaskRead<Method extends keyof TasksRpcContract & string, T>(
   };
 }
 
+export function useTaskMutationState<
+  Method extends keyof TasksRpcContract & string,
+>(method: Method, scope: TaskMutationScope = {}) {
+  return experimental_useRpcMutation<TasksRpcContract, Method>({
+    method,
+    optimistic(input, cache) {
+      predictTaskMutation(method, input, cache, scope);
+    },
+  });
+}
 export function useTaskMutation<Method extends keyof TasksRpcContract & string>(
   method: Method,
+  scope: TaskMutationScope = {},
 ) {
-  return experimental_useRpcMutation<TasksRpcContract, Method>({ method })
-    .mutate;
+  return useTaskMutationState(method, scope).mutate;
 }
 
 export function useTaskUpdateMutation(
@@ -119,11 +130,22 @@ export function useTaskRows(
       return undefined;
     return sortTasks(
       (openPending ? openKeys : membership.data.keys).flatMap((key) =>
-        rows.data?.[key] ? [rows.data[key]!] : [],
+        rows.data?.[key] &&
+        (input.projectId === undefined ||
+          rows.data[key]!.projectId === input.projectId)
+          ? [rows.data[key]!]
+          : [],
       ),
       "manual",
     );
-  }, [membership.data, rows.data, rows.isLoading, openPending, openKeys]);
+  }, [
+    membership.data,
+    rows.data,
+    rows.isLoading,
+    openPending,
+    openKeys,
+    input.projectId,
+  ]);
   return {
     data,
     error: membership.error ?? rows.error?.message ?? null,

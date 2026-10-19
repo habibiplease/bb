@@ -9,6 +9,7 @@ import {
   useProjects,
   useTaskRead,
   useTaskMutation,
+  useTaskMutationState,
 } from "../../shell/data.js";
 import {
   Select,
@@ -107,9 +108,7 @@ function LabelEditorRow({
 
 function LabelsSection() {
   const rpc = useTasksRpc();
-  const updateLabelMutation = useTaskMutation("updateLabel");
   const createLabelMutation = useTaskMutation("createLabel");
-  const deleteLabelMutation = useTaskMutation("deleteLabel");
   const projects = useProjects();
   const projectList = projects.data ?? [];
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
@@ -122,6 +121,14 @@ function LabelsSection() {
     (value) => value.labels,
     projectId !== null,
   );
+  const { mutate: updateLabelMutation, pendingInputs: updatingLabels } =
+    useTaskMutationState("updateLabel", {
+      projectId: projectId ?? undefined,
+    });
+  const { mutate: deleteLabelMutation, pendingInputs: deletingLabels } =
+    useTaskMutationState("deleteLabel", {
+      projectId: projectId ?? undefined,
+    });
   const [editingId, setEditingId] = useState<string | null>(null);
   const { error, run } = useActionError();
   const [confirmDelete, setConfirmDelete] = useState<{
@@ -172,7 +179,13 @@ function LabelsSection() {
       </Select>
       <div className="divide-y divide-border-hairline rounded-md border border-border">
         {(labels.data ?? []).map((label) => (
-          <div key={label.id} className="px-3 py-2">
+          <div
+            key={label.id}
+            aria-busy={[...updatingLabels, ...deletingLabels].some(
+              (input) => input.labelId === label.id,
+            )}
+            className="px-3 py-2"
+          >
             {editingId === label.id ? (
               <LabelEditorRow
                 initialName={label.name}
@@ -181,12 +194,13 @@ function LabelsSection() {
                 onCancel={() => setEditingId(null)}
                 onSubmit={(name, color) =>
                   run(async () => {
-                    await updateLabelMutation({
+                    const write = updateLabelMutation({
                       labelId: label.id,
                       name,
                       color,
                     });
                     setEditingId(null);
+                    await write;
                   })
                 }
               />
@@ -281,7 +295,8 @@ function LabelsSection() {
 }
 
 function PresetsSection() {
-  const savePreset = useSavePresetDraft();
+  const { save: savePreset, pendingInputs: pendingPresets } =
+    useSavePresetDraft();
   const deletePresetMutation = useTaskMutation("deletePreset");
   const presets = usePresets();
   const machines = useTaskRead("listMachines", {}, (value) => value.machines);
@@ -328,7 +343,13 @@ function PresetsSection() {
           </thead>
           <tbody className="divide-y divide-border-hairline">
             {(presets.data ?? []).map((preset) => (
-              <tr key={preset.id} className="group">
+              <tr
+                aria-busy={pendingPresets.some(
+                  (input) => input.presetId === preset.id,
+                )}
+                key={preset.id}
+                className="group"
+              >
                 <td className="px-3 py-2">
                   <span className="flex items-center gap-2">
                     <Icon
@@ -420,6 +441,7 @@ function PresetsSection() {
       ) : null}
       {dialog ? (
         <PresetDialog
+          pending={pendingPresets.length > 0}
           key={dialog.key}
           open
           onOpenChange={(open) => {
@@ -437,12 +459,14 @@ const ROOT_PARENT = "__root__";
 
 function FolderRow({
   folder,
+  pending,
   rootFolders,
   onRename,
   onMove,
   onDelete,
 }: {
   folder: Folder;
+  pending: boolean;
   rootFolders: Folder[];
   onRename: (name: string) => Promise<void>;
   onMove: (parentFolderId: string | null) => Promise<void>;
@@ -452,11 +476,12 @@ function FolderRow({
   const [draftName, setDraftName] = useState(folder.name);
   const parentOptions = rootFolders.filter((entry) => entry.id !== folder.id);
   const rename = () => {
-    void onRename(draftName.trim()).then(() => setRenaming(false));
+    void onRename(draftName.trim());
+    setRenaming(false);
   };
 
   return (
-    <div className="flex items-center gap-2 px-3 py-2">
+    <div aria-busy={pending} className="flex items-center gap-2 px-3 py-2">
       <Icon name="Folder" className="size-3.5 shrink-0 text-muted-foreground" />
       {renaming ? (
         <>
@@ -543,14 +568,17 @@ function FolderRow({
 }
 
 function FoldersSection() {
-  const renameFolderMutation = useTaskMutation("renameFolder");
-  const moveFolderMutation = useTaskMutation("moveFolder");
-  const deleteFolderMutation = useTaskMutation("deleteFolder");
+  const { mutate: renameFolderMutation, pendingInputs: renamingFolders } =
+    useTaskMutationState("renameFolder");
+  const { mutate: moveFolderMutation, pendingInputs: movingFolders } =
+    useTaskMutationState("moveFolder");
   const folders = useFolders();
   const projects = useProjects();
   const { error, setError, run } = useActionError();
   const [confirmDelete, setConfirmDelete] = useState<Folder | null>(null);
   const folderList = useMemo(() => folders.data ?? [], [folders.data]);
+  const deleteFolderMutation = useTaskMutation("deleteFolder");
+
   const rootFolders = useMemo(
     () => folderList.filter((folder) => folder.parentFolderId === null),
     [folderList],
@@ -599,6 +627,9 @@ function FoldersSection() {
         <div className="divide-y divide-border-hairline rounded-md border border-border">
           {folderList.map((folder) => (
             <FolderRow
+              pending={[...renamingFolders, ...movingFolders].some(
+                (input) => input.folderId === folder.id,
+              )}
               key={folder.id}
               folder={folder}
               rootFolders={rootFolders}

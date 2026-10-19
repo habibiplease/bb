@@ -1,4 +1,4 @@
-import { useTaskMutation } from "../../shell/data.js";
+import { useTaskMutation, useTaskMutationState } from "../../shell/data.js";
 import { useState } from "react";
 import type {
   Label,
@@ -402,28 +402,26 @@ function DispatchTargetMenu({
   onError: (message: string) => void;
   triggerClassName: string;
 }) {
-  const updateProjectMutation = useTaskMutation("updateProject");
+  const { mutate: updateProjectMutation, pendingInputs } =
+    useTaskMutationState("updateProject");
   const [open, setOpen] = useState(false);
   const [selection, setSelection] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const saving = pendingInputs.some((input) => input.projectId === project.id);
   const linkedBbProjectId = project.linkedBbProjectId;
   const linkedName = bbProjects.find(
     (candidate) => candidate.id === linkedBbProjectId,
   )?.name;
 
   const save = async (linkedId: string | null) => {
-    if (saving) return;
-    setSaving(true);
     try {
-      await updateProjectMutation({
+      const write = updateProjectMutation({
         projectId: project.id,
         linkedBbProjectId: linkedId,
       });
       setOpen(false);
+      await write;
     } catch (saveError) {
       onError(errorMessage(saveError));
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -466,7 +464,7 @@ function DispatchTargetMenu({
               variant="ghost"
               size="sm"
               className="h-7 text-muted-foreground"
-              disabled={saving}
+              aria-busy={saving}
               onClick={() => void save(null)}
             >
               <Icon name="X" className="size-3.5" />
@@ -478,7 +476,7 @@ function DispatchTargetMenu({
           <Button
             size="sm"
             className="h-7"
-            disabled={saving}
+            aria-busy={saving}
             onClick={() => void save(selection)}
           >
             Save

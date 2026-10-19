@@ -1,3 +1,4 @@
+import { TASK_POSITION_STEP as POSITION_STEP } from "../shared/position.js";
 import { createHash, randomBytes } from "node:crypto";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
@@ -52,7 +53,7 @@ type PluginDatabase = ReturnType<BbPluginApi["storage"]["database"]>;
 type SqlParameter = string | number;
 
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const POSITION_STEP = 1_024;
+
 const MIN_POSITION_GAP = 0.000_001;
 
 interface FolderRow {

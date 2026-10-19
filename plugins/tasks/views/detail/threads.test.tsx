@@ -1,6 +1,6 @@
 import { liveTaskRpcFixtures } from "../../test-fixtures.js";
 // @vitest-environment jsdom
-import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import { makeTask, rpcInput } from "../../test-fixtures.js";
@@ -157,8 +157,11 @@ describe("task detail pull request pills", () => {
     expect(slot.queryByRole("link")).toBeNull();
   });
 
-  it("detaches a thread from its card after confirmation and refetches the list", async () => {
-    let detached = false;
+  it("detaches a thread immediately and rolls back a refused write", async () => {
+    let rejectWrite!: (error: Error) => void;
+    const write = new Promise<never>((_resolve, reject) => {
+      rejectWrite = reject;
+    });
     const slot = renderSlot(
       app.navPanels[0]!,
       { subPath: "task/TSK-5" },
@@ -166,14 +169,11 @@ describe("task detail pull request pills", () => {
         rpc: liveTaskRpcFixtures(
           detailRpc({
             listTaskThreads: () => ({
-              taskThreads: detached
-                ? []
-                : [taskThreadRow(THREAD_ROW_ID, "thr_worker000", "Worker")],
+              taskThreads: [
+                taskThreadRow(THREAD_ROW_ID, "thr_worker000", "Worker"),
+              ],
             }),
-            taskThreadsDetach: (input: unknown) => {
-              detached = true;
-              return { threadId: rpcInput(input).threadId };
-            },
+            taskThreadsDetach: () => write,
           }),
         ),
       },
@@ -189,6 +189,9 @@ describe("task detail pull request pills", () => {
       });
     });
     await waitFor(() => expect(slot.queryByText("Worker")).toBeNull());
+    await act(async () => rejectWrite(new Error("Detach refused")));
+    await slot.findByText("Worker");
+    await slot.findByText("Detach refused");
   });
 
   it("revalidates PR state on window focus without a task-thread mutation", async () => {

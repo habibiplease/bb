@@ -2,7 +2,7 @@ import { RefreshError } from "../../components/refresh-error.js";
 import { useEffect, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import SmilePlusIcon from "@hugeicons/core-free-icons/SmilePlusIcon";
-import type { Task } from "../../shared/contract.js";
+import type { Task, TasksRpcContract } from "../../shared/contract.js";
 import { errorMessage } from "../../shared/errors.js";
 import type { DelegationRpcContract } from "../../delegate/contract.js";
 import {
@@ -14,6 +14,7 @@ import {
   useTaskRead,
   useTaskRows,
   useTaskMutation,
+  useTaskMutationState,
   useTaskUpdateMutation,
 } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
@@ -208,11 +209,34 @@ function TaskDetail({
   const updateTaskMutation = useTaskUpdateMutation(() => readTaskKey).mutate;
   const moveTaskToProjectMutation = useTaskMutation("moveTaskToProject");
   const createTaskMutation = useTaskMutation("createTask");
-  const deleteAttachmentMutation = useTaskMutation("deleteAttachment");
-  const detach = experimental_useRpcMutation<
-    DelegationRpcContract,
-    "taskThreadsDetach"
-  >({ method: "taskThreadsDetach" }).mutate;
+  const {
+    mutate: deleteAttachmentMutation,
+    pendingInputs: deletingAttachments,
+  } = useTaskMutationState("deleteAttachment", {
+    taskId: task.id,
+  });
+  const { mutate: detach, pendingInputs: detachingThreads } =
+    experimental_useRpcMutation<
+      DelegationRpcContract & TasksRpcContract,
+      "taskThreadsDetach"
+    >({
+      method: "taskThreadsDetach",
+      optimistic(input, cache) {
+        cache.updateKey("getTaskThreadsKeyed", input.taskId, (current) =>
+          current.filter((thread) => thread.threadId !== input.threadId),
+        );
+        cache.update(
+          "listTaskThreads",
+          { taskId: input.taskId },
+          (current) => ({
+            ...current,
+            taskThreads: current.taskThreads.filter(
+              (thread) => thread.threadId !== input.threadId,
+            ),
+          }),
+        );
+      },
+    });
   const navigation = useTasksNavigation();
   const { toasts, push, dismiss } = useDetailToasts();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -441,6 +465,7 @@ function TaskDetail({
           </div>
 
           <AttachmentsGrid
+            pendingIds={deletingAttachments.map((input) => input.attachmentId)}
             attachments={attachments.data ?? []}
             onRemove={async (attachment) => {
               const result = await deleteAttachmentMutation({
@@ -462,6 +487,7 @@ function TaskDetail({
           {(threads.data ?? []).length > 0 ? (
             <div className="mt-6">
               <ThreadsSection
+                pendingIds={detachingThreads.map((input) => input.threadId)}
                 threads={threads.data ?? []}
                 pullRequests={pullRequests.data?.pullRequests}
                 unavailableThreadIds={

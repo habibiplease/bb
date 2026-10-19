@@ -408,3 +408,165 @@ it("shows the server's destination order after accepting a list status edit", as
   await waitFor(() => expect(slot.queryByText("Moving task")).toBeNull());
   expect(slot.getByText("Already done")).toBeTruthy();
 });
+
+it.each(["folder", "label", "preset"])(
+  "predicts a %s change and rolls back a refused write",
+  async (kind) => {
+    const server = setup();
+    const folder = server.store.tasks.createFolder({
+      name: "Before",
+      parentFolderId: null,
+    });
+    server.store.tasks.createLabel({
+      projectId: server.project.id,
+      name: "Before",
+      color: "blue",
+    });
+    server.store.tasks.createPreset({
+      name: "Before",
+      providerId: "codex",
+      modelId: "test",
+      reasoningLevel: "medium",
+      serviceTier: null,
+      permissionMode: "auto",
+      environmentKind: "project-default",
+      baseBranch: null,
+      machineId: null,
+      instructions: "",
+    });
+    let rejectWrite!: (error: Error) => void;
+    const write = new Promise<never>((_resolve, reject) => {
+      rejectWrite = reject;
+    });
+    const method =
+      kind === "folder"
+        ? "renameFolder"
+        : kind === "label"
+          ? "updateLabel"
+          : "deletePreset";
+    const slot = server.connect(
+      renderSlot(
+        app.navPanels[0]!,
+        { subPath: "manage" },
+        {
+          ...server.options,
+          rpc: { ...server.options.rpc, [method]: () => write },
+        },
+      ),
+    );
+    if (kind !== "label")
+      fireEvent.mouseDown(
+        await slot.findByRole("tab", {
+          name: kind === "folder" ? "Folders" : "Presets",
+        }),
+      );
+    if (kind === "preset") {
+      fireEvent.click(
+        await slot.findByRole("button", { name: "Delete preset Before" }),
+      );
+      await waitFor(() =>
+        expect(
+          slot.queryByRole("button", { name: "Delete preset Before" }),
+        ).toBeNull(),
+      );
+    } else {
+      fireEvent.click(
+        await slot.findByRole("button", {
+          name:
+            kind === "folder" ? "Rename folder Before" : "Edit label Before",
+        }),
+      );
+      const editor =
+        kind === "folder"
+          ? slot
+              .getAllByRole("textbox")
+              .find((input) => input.getAttribute("value") === folder.name)!
+          : slot.getAllByPlaceholderText("Label name")[0]!;
+      fireEvent.change(editor, { target: { value: "After" } });
+      fireEvent.click(slot.getByRole("button", { name: "Save" }));
+      await slot.findByRole("button", {
+        name: kind === "folder" ? "Rename folder After" : "Edit label After",
+      });
+    }
+    await act(async () =>
+      rejectWrite(
+        new experimental_PluginRpcRefusal({
+          code: "conflict",
+          message: "Write refused",
+        }),
+      ),
+    );
+    await slot.findByRole("button", {
+      name:
+        kind === "folder"
+          ? "Rename folder Before"
+          : kind === "label"
+            ? "Edit label Before"
+            : "Delete preset Before",
+    });
+    await slot.findByText("Write refused");
+  },
+);
+
+it("moves a board card immediately and rolls back a refused drop", async () => {
+  const server = setup();
+  const task = await server.create("Moving card");
+  let rejectWrite!: (error: Error) => void;
+  const write = new Promise<never>((_resolve, reject) => {
+    rejectWrite = reject;
+  });
+  const slot = server.connect(
+    renderSlot(
+      app.navPanels[0]!,
+      { subPath: `${server.project.id}?view=board` },
+      {
+        ...server.options,
+        rpc: { ...server.options.rpc, boardMove: () => write },
+      },
+    ),
+  );
+  await slot.findByText("Moving card");
+  const card = slot.container.querySelector<HTMLElement>(
+    `[data-task-key="${task.key}"]`,
+  )!;
+  const columns = Array.from(
+    slot.container.querySelectorAll<HTMLElement>("[data-board-column]"),
+  );
+  columns.forEach((column, index) => {
+    column.getBoundingClientRect = () => new DOMRect(index * 250, 0, 230, 600);
+  });
+  columns[0]!.parentElement!.parentElement!.getBoundingClientRect = () =>
+    new DOMRect(0, 0, 1500, 600);
+  card.getBoundingClientRect = () => new DOMRect(250, 50, 230, 100);
+  const pointer = (type: string, x: number) =>
+    new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: 75 });
+  fireEvent(card, pointer("pointerdown", 260));
+  fireEvent(window, pointer("pointermove", 1010));
+  fireEvent(window, pointer("pointerup", 1010));
+  const column = () =>
+    slot
+      .getByText("Moving card")
+      .closest("[data-board-column]")
+      ?.getAttribute("data-board-column");
+  await waitFor(() => expect(column()).toBe("done"));
+  expect(
+    slot.container
+      .querySelector(`[data-task-key="${task.key}"]`)
+      ?.getAttribute("aria-busy"),
+  ).toBe("true");
+  await act(async () =>
+    rejectWrite(
+      new experimental_PluginRpcRefusal({
+        code: "conflict",
+        message: "Move refused",
+      }),
+    ),
+  );
+  await waitFor(() => expect(column()).toBe("todo"));
+  expect(
+    slot.container
+      .querySelector(`[data-task-key="${task.key}"]`)
+      ?.getAttribute("aria-busy"),
+  ).toBe("false");
+  await slot.findByText(/Move refused/);
+});
