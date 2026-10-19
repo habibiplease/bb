@@ -29,7 +29,7 @@ export type DocumentIO = {
     content: string,
     expectedSha256: string | null,
   ): Promise<{ outcome: "written"; sha256: string } | { outcome: "conflict" }>;
-  afterSave?(content: string): Promise<void>;
+  afterSave?(content: string, move: (path: string) => void): Promise<void>;
   proposals?: {
     update(content: string, version: number): Promise<Proposal>;
     resolve(
@@ -58,7 +58,13 @@ class DocumentConflict extends Error {
   }
 }
 
-function createSession(initialIO: DocumentIO) {
+function createSession(
+  initialIO: DocumentIO,
+  onMove?: (
+    previous: NonNullable<DocumentIO["liveRead"]>,
+    path: string,
+  ) => void,
+) {
   let io = initialIO;
   let state: DocumentState = {
     loaded: false,
@@ -81,6 +87,8 @@ function createSession(initialIO: DocumentIO) {
   let refreshing: Promise<void> | null = null;
   let saving: Promise<void> | null = null;
   let refreshAgain = false;
+  const replacedHashes = new Set<string>();
+  let readFailed = false;
   const savedDraft = () =>
     state.proposal?.status === "pending"
       ? state.proposal.content
@@ -100,11 +108,29 @@ function createSession(initialIO: DocumentIO) {
     });
     return result;
   };
-  const receiveError = (error: Error) => set({ error: error.message });
+  const receiveError = (error: Error) => {
+    if (!state.saving && !state.busy) {
+      readFailed = true;
+      set({ error: error.message });
+    }
+  };
   const receive = (file: Document) => {
     const proposal = file.proposal;
-    if (state.saving || state.busy) return;
+    if (state.saving || state.busy || replacedHashes.has(file.sha256)) return;
     set({ previewBaseUrl: file.previewBaseUrl, previewPath: file.previewPath });
+    if (
+      state.loaded &&
+      file.sha256 === state.sha256 &&
+      proposal?.version === state.proposal?.version
+    ) {
+      replacedHashes.clear();
+      if (readFailed) {
+        readFailed = false;
+        set({ error: null });
+      }
+      return;
+    }
+    readFailed = false;
     if (state.dirty) {
       if (
         file.sha256 !== state.sha256 ||
@@ -156,8 +182,16 @@ function createSession(initialIO: DocumentIO) {
         } else {
           const result = await io.write(content, force ? null : state.sha256);
           if (result.outcome === "conflict") throw new DocumentConflict();
+          if (state.sha256 !== result.sha256) replacedHashes.add(state.sha256);
+          replacedHashes.delete(result.sha256);
           set({ content, sha256: result.sha256, conflict: false });
-          await io.afterSave?.(content);
+          await io.afterSave?.(content, (path) => {
+            if (io.liveRead) {
+              onMove?.(io.liveRead, path);
+              io = { ...io, liveRead: { ...io.liveRead, path } };
+            }
+            set({ previewPath: path, error: null });
+          });
         }
         force = false;
       }
@@ -206,17 +240,20 @@ function createSession(initialIO: DocumentIO) {
     },
     receive,
     receiveError,
-    discard: () => set({ draft: savedDraft() }),
+    discard: () => {
+      replacedHashes.clear();
+      set({ draft: savedDraft() });
+    },
     setPreview: (previewBaseUrl: string) => set({ previewBaseUrl }),
-    initialize: (content: string) =>
-      set({
-        ...(state.dirty || state.saving ? {} : { content }),
-        draft: content,
-      }),
+    initialize: (content: string) => {
+      if (!state.dirty && !state.saving && !state.busy)
+        set({ content, draft: content });
+    },
     reload: async () => {
       if (timer) clearTimeout(timer);
       timer = null;
       await operations;
+      replacedHashes.clear();
       set({ draft: savedDraft() });
       return refresh();
     },
@@ -335,18 +372,25 @@ function useLiveSession(
   proposals: boolean,
 ) {
   const result = useSession(session, input !== undefined);
+  const liveInput = useMemo(
+    () =>
+      input === undefined
+        ? undefined
+        : { ...input, path: result.state.previewPath || input.path },
+    [input, result.state.previewPath],
+  );
   const query = experimental_useRpcQuery<
     typeof docsRpcContract,
     "readDocument"
   >({
     method: "readDocument",
-    input: input ?? { vaultId: "", path: "" },
+    input: liveInput ?? { vaultId: "", path: "" },
     enabled: input !== undefined,
     refetchOnMount: "always",
   });
   const previewBaseUrl = useLeaseUrl(query.data?.preview);
   useLayoutEffect(() => {
-    if (input === undefined) return;
+    if (liveInput === undefined) return;
     session.setPreview(previewBaseUrl);
     const error = query.error;
     if (error) session.receiveError(error);
@@ -356,12 +400,13 @@ function useLiveSession(
         sha256: query.data.sha256,
         proposal: proposals ? query.data.proposal : null,
         previewBaseUrl,
-        previewPath: input.path,
+        previewPath: liveInput.path,
       });
     }
   }, [
     session,
     input,
+    liveInput,
     query.data,
     query.error,
     previewBaseUrl,
@@ -409,7 +454,12 @@ export function useSavedDocument(io: DocumentIO) {
     if (sessions === null || io.liveRead === undefined)
       return createSession(io);
     const key = JSON.stringify([io.liveRead.vaultId, io.liveRead.path]);
-    const session = sessions.get(key) ?? createSession(io);
+    const session =
+      sessions.get(key) ??
+      createSession(io, (previous, path) => {
+        sessions.delete(JSON.stringify([previous.vaultId, previous.path]));
+        sessions.set(JSON.stringify([previous.vaultId, path]), session);
+      });
     session.setIO(io);
     sessions.delete(key);
     sessions.set(key, session);

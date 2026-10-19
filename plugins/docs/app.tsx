@@ -443,6 +443,8 @@ function TiptapEditor(props: {
     inline = false,
     disabled = false,
   } = props;
+  const notePathRef = useRef(notePath);
+  notePathRef.current = notePath;
   const rootRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Editor | null>(null);
   const baselineRef = useRef<ProseMirrorNode | null>(null);
@@ -458,7 +460,7 @@ function TiptapEditor(props: {
       const body = parseMarkdownDocument(latest.current.baseMarkdown).body;
       const root = new window.DOMParser().parseFromString(
         editor.storage.markdown.parser.parse(
-          displayMarkdown(body, baseUrlRef.current, notePath),
+          displayMarkdown(body, baseUrlRef.current, notePathRef.current),
         ),
         "text/html",
       ).body;
@@ -506,7 +508,10 @@ function TiptapEditor(props: {
         MarkdownTaskInput,
         HtmlBlock,
         HtmlSource,
-        HtmlEmbed.configure({ baseUrl: () => baseUrlRef.current, notePath }),
+        HtmlEmbed.configure({
+          baseUrl: () => baseUrlRef.current,
+          notePath: notePathRef.current,
+        }),
         Placeholder.configure({ placeholder: "Start writing…" }),
         Markdown.configure({
           html: true,
@@ -554,7 +559,8 @@ function TiptapEditor(props: {
     blocksRef.current = loadMarkdownBlocks(
       editor,
       markdownDocument.body,
-      (source) => displayMarkdown(source, baseUrlRef.current, notePath),
+      (source) =>
+        displayMarkdown(source, baseUrlRef.current, notePathRef.current),
       false,
     );
     setBase(editor);
@@ -566,7 +572,7 @@ function TiptapEditor(props: {
             editor.schema.topNodeType.create(null, nodes),
           ),
           baseUrlRef.current,
-          notePath,
+          notePathRef.current,
         ),
       );
     serializeRef.current = getMarkdown;
@@ -577,7 +583,7 @@ function TiptapEditor(props: {
       editorRef.current = null;
     };
     // oxlint-disable-next-line react/exhaustive-deps
-  }, [initialValue, notePath, inline]);
+  }, [initialValue, inline]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -598,7 +604,8 @@ function TiptapEditor(props: {
       blocksRef.current = loadMarkdownBlocks(
         editor,
         body,
-        (source) => displayMarkdown(source, baseUrlRef.current, notePath),
+        (source) =>
+          displayMarkdown(source, baseUrlRef.current, notePathRef.current),
         !previewChanged,
       );
       editor.commands.setTextSelection({
@@ -1278,11 +1285,12 @@ function NotePane({
           content,
           ...(expectedSha256 === null ? {} : { expectedSha256 }),
         }),
-      afterSave: async (content) => {
+      afterSave: async (content, move) => {
         if (parseMarkdownDocument(content).title) return;
         const renamed = await rpc.renameToTitle({ vaultId, path });
         if (renamed.path !== path) {
           path = renamed.path;
+          move(path);
           callbacks.current.onRenamed(path);
         }
       },
@@ -1947,6 +1955,9 @@ function NotesWorkspace({
   const { data, error, refresh } = useNotebook(route.vaultId);
   const activeVaultId = data?.vault.id ?? route.vaultId;
   const filePath = route.filePath;
+  const documentKeys = useRef(new Map<string, string>());
+  const documentKey = `${activeVaultId}:${filePath}`;
+  const editorKey = documentKeys.current.get(documentKey) ?? documentKey;
   const currentVaultIdRef = useRef(activeVaultId);
   currentVaultIdRef.current = activeVaultId;
   const isCurrentVault = useCallback(
@@ -2135,10 +2146,11 @@ function NotesWorkspace({
           />
         ) : filePath && /\.md$/i.test(filePath) ? (
           <NotePane
-            key={`${activeVaultId}:${filePath}`}
+            key={editorKey}
             vaultId={activeVaultId}
             notePath={filePath}
             onRenamed={(next) => {
+              documentKeys.current.set(`${activeVaultId}:${next}`, editorKey);
               open(next, true);
             }}
           />

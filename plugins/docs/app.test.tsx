@@ -1807,3 +1807,97 @@ it("keeps a failed save visible without replacing the draft with an unchanged ca
   expect(slot.getByRole("textbox", { name: "Document content" })).toBe(editor);
   expect(editor.textContent).toBe("Unsaved draft");
 });
+
+it("keeps typing and the focused editor through an autosave rename", async () => {
+  const rename = deferred<{ path: string }>();
+  const secondWrite = deferred<void>();
+  let writes = 0;
+  let renamed = false;
+  let disk = { content: "", sha256: "empty" };
+  const Panel = docsRegistration.component;
+  const slot = renderSlot(
+    docsRegistration,
+    { subPath: "personal/untitled.md" },
+    {
+      rpc: {
+        listNotes: () => listNotesResult([]),
+        preparePreview: () => preview,
+        readNote: (raw: unknown) => {
+          const { path } = z.object({ path: z.string() }).parse(raw);
+          if (renamed && path === "untitled.md")
+            throw new Error("HTTP 404 Path does not exist: untitled.md");
+          return disk;
+        },
+        saveNote: async (raw: unknown) => {
+          const { content } = z.object({ content: z.string() }).parse(raw);
+          if (++writes > 1) await secondWrite.promise;
+          disk = { content, sha256: content };
+          return { outcome: "written", sha256: content };
+        },
+        renameToTitle: async () => {
+          const result = await rename.promise;
+          renamed = true;
+          return result;
+        },
+      },
+    },
+  );
+  const editor = await slot.findByRole("textbox", { name: "Document content" });
+  editor.focus();
+  editor.innerHTML = "<h1>Hello</h1><p>asdf</p>";
+  fireEvent.input(editor);
+  await waitFor(
+    () =>
+      expect(
+        slot.rpcCalls.some((call) => call.method === "renameToTitle"),
+      ).toBe(true),
+    { timeout: 2000 },
+  );
+  editor.innerHTML =
+    "<h1>Hello</h1><p>asdf continues</p><ul><li><p>list item</p></li></ul>";
+  fireEvent.input(editor);
+  await act(async () => rename.resolve({ path: "hello.md" }));
+  slot.rerender(<Panel subPath="personal/hello.md" />);
+  await waitFor(() =>
+    expect(
+      slot.getByRole("textbox", { name: "Document content" }).textContent,
+    ).toBe("Helloasdf continueslist item"),
+  );
+  expect(slot.getByRole("textbox", { name: "Document content" })).toBe(editor);
+  expect(document.activeElement).toBe(editor);
+  expect(slot.queryByText(/404/)).toBeNull();
+  await act(async () => secondWrite.resolve());
+  await waitFor(() => expect(disk.content).toContain("asdf continues"));
+});
+
+it("preserves the typed paragraphs after saving against an older cached document", async () => {
+  const write = deferred<{ outcome: "written"; sha256: string }>();
+  const slot = renderSlot(
+    docsRegistration,
+    { subPath: "personal/hello.md" },
+    {
+      rpc: {
+        listNotes: () => listNotesResult([]),
+        preparePreview: () => preview,
+        readNote: () => ({ content: "# Hello", sha256: "old" }),
+        saveNote: () => write.promise,
+        renameToTitle: () => ({ path: "hello.md" }),
+      },
+    },
+  );
+  const editor = await slot.findByRole("textbox", { name: "Document content" });
+  editor.innerHTML = "<h1>Hello</h1><p>asdf</p>";
+  fireEvent.input(editor);
+  await waitFor(
+    () =>
+      expect(slot.rpcCalls.some((call) => call.method === "saveNote")).toBe(
+        true,
+      ),
+    { timeout: 2000 },
+  );
+  editor.innerHTML = "<h1>Hello</h1><p>asdf continues</p>";
+  fireEvent.input(editor);
+  await act(async () => write.resolve({ outcome: "written", sha256: "new" }));
+  expect(editor.innerHTML).toContain("<p>asdf continues</p>");
+  expect(editor.textContent).toBe("Helloasdf continues");
+});
