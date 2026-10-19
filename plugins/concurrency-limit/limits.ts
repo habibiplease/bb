@@ -10,6 +10,27 @@ export interface LimitConfiguration {
   readonly hostOverrides: readonly HostLimitOverride[];
 }
 
+export type LimitSettingUpdate =
+  | { field: "global"; limit: number | null }
+  | { field: "host"; hostId: string; limit: number | null };
+
+export function applyLimitSetting(
+  configuration: LimitConfiguration,
+  update: LimitSettingUpdate,
+) {
+  if (update.field === "global")
+    return {
+      globalLimit: update.limit,
+      hostOverrides: [...configuration.hostOverrides],
+    };
+  const hostOverrides = configuration.hostOverrides.filter(
+    (override) => override.hostId !== update.hostId,
+  );
+  if (update.limit !== null)
+    hostOverrides.push({ hostId: update.hostId, limit: update.limit });
+  return { globalLimit: configuration.globalLimit, hostOverrides };
+}
+
 export interface ResolvedHostLimit {
   readonly limit: number;
   readonly mode: "automatic" | "override";

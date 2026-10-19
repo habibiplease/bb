@@ -1,8 +1,20 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
+import {
+  loadPluginApp,
+  renderSlot as renderTestSlot,
+} from "@get-bb/plugin-sdk/testing/app";
 
+import { concurrencyLimitRpcContract } from "./server.js";
+import { applyLimitSetting } from "./limits.js";
+const renderSlot = (
+  ...[registration, props, options = {}]: Parameters<typeof renderTestSlot>
+) =>
+  renderTestSlot(registration, props, {
+    ...options,
+    experimental_rpcContract: concurrencyLimitRpcContract,
+  });
 const app = await loadPluginApp(() => import("./app"));
 
 afterEach(cleanup);
@@ -34,29 +46,10 @@ interface ConfigurationInput {
 }
 
 function configurationInput(input: unknown): ConfigurationInput {
-  if (typeof input !== "object" || input === null) {
-    throw new Error("Expected configuration input");
-  }
-  const globalLimit = Reflect.get(input, "globalLimit");
-  const rawOverrides = Reflect.get(input, "hostOverrides");
-  if (
-    (globalLimit !== null && typeof globalLimit !== "number") ||
-    !Array.isArray(rawOverrides)
-  ) {
-    throw new Error("Expected configuration input");
-  }
-  const hostOverrides = rawOverrides.map((rawOverride) => {
-    if (typeof rawOverride !== "object" || rawOverride === null) {
-      throw new Error("Expected host override");
-    }
-    const hostId = Reflect.get(rawOverride, "hostId");
-    const limit = Reflect.get(rawOverride, "limit");
-    if (typeof hostId !== "string" || typeof limit !== "number") {
-      throw new Error("Expected host override");
-    }
-    return { hostId, limit };
-  });
-  return { globalLimit, hostOverrides };
+  const value = concurrencyLimitRpcContract.setConfiguration.input.parse(input);
+  return "field" in value
+    ? applyLimitSetting({ globalLimit: null, hostOverrides: [] }, value)
+    : value;
 }
 
 describe("Concurrency limit settings", () => {
@@ -142,7 +135,7 @@ describe("Concurrency limit settings", () => {
     await waitFor(() =>
       expect(slot.rpcCalls).toContainEqual({
         method: "setConfiguration",
-        input: { globalLimit: 3, hostOverrides: [] },
+        input: { field: "global", limit: 3 },
       }),
     );
 
@@ -155,8 +148,9 @@ describe("Concurrency limit settings", () => {
       expect(slot.rpcCalls).toContainEqual({
         method: "setConfiguration",
         input: {
-          globalLimit: 3,
-          hostOverrides: [{ hostId: "host-a", limit: 2 }],
+          field: "host",
+          hostId: "host-a",
+          limit: 2,
         },
       }),
     );
@@ -165,15 +159,17 @@ describe("Concurrency limit settings", () => {
 
 it("clears a failed save after an unchanged successful read without losing a draft", async () => {
   const configuration = { globalLimit: null, hostOverrides: [], hosts };
+  let rejectWrite!: (error: Error) => void;
+  const write = new Promise<never>((_resolve, reject) => {
+    rejectWrite = reject;
+  });
   const slot = renderSlot(
     app.settingsSections[0]!,
     {},
     {
       rpc: {
         getConfiguration: () => configuration,
-        setConfiguration: () => {
-          throw new Error("Save failed");
-        },
+        setConfiguration: () => write,
       },
     },
   );
@@ -182,12 +178,21 @@ it("clears a failed save after an unchanged successful read without losing a dra
   });
   fireEvent.change(input, { target: { value: "7" } });
   fireEvent.blur(input);
+  await waitFor(() => expect(input.getAttribute("aria-busy")).toBe("true"));
+  expect(input.hasAttribute("disabled")).toBe(false);
+  expect(
+    slot
+      .getByRole("spinbutton", { name: "Laptop thread limit" })
+      .hasAttribute("disabled"),
+  ).toBe(false);
+  fireEvent.change(input, { target: { value: "9" } });
+  await act(async () => rejectWrite(new Error("Save failed")));
   await slot.findByText("Save failed");
   await act(async () => {
     await slot.experimental_invalidateRpc(null);
   });
   await waitFor(() => expect(slot.queryByText("Save failed")).toBeNull());
-  expect(input.getAttribute("value")).toBe("7");
+  expect(input.getAttribute("value")).toBe("9");
 });
 
 it.each([false, true])(

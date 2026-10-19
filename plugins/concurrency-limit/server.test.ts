@@ -493,3 +493,30 @@ describe("capacity wake events", () => {
     expect(harness.recheckCount).toBe(4);
   });
 });
+
+it("preserves independent limit fields when writes overlap", async () => {
+  const { bb, harness } = await setup();
+  try {
+    await Promise.all([
+      harness.behavior.callRpc("setConfiguration", {
+        field: "global",
+        limit: 3,
+      }),
+      harness.behavior.callRpc("setConfiguration", {
+        field: "host",
+        hostId: "host-a",
+        limit: 2,
+      }),
+      harness.behavior.callRpc("setConfiguration", {
+        field: "global",
+        limit: 5,
+      }),
+    ]);
+    expect(await bb.storage.kv.get("configuration")).toEqual({
+      globalLimit: 5,
+      hostOverrides: [{ hostId: "host-a", limit: 2 }],
+    });
+  } finally {
+    await harness.dispose();
+  }
+});

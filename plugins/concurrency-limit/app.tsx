@@ -7,6 +7,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { Input } from "@/components/ui/input";
 import {
+  applyLimitSetting,
   commitGlobalLimitDraft,
   commitHostLimitDraft,
   MAX_LIMIT_VALUE,
@@ -44,14 +45,38 @@ function ConcurrencyLimitSettings() {
     typeof concurrencyLimitRpcContract,
     "getConfiguration"
   >({ method: "getConfiguration", input: null });
-  const { mutate } = experimental_useRpcMutation<
+  const { mutate, pendingInputs, isPending } = experimental_useRpcMutation<
     typeof concurrencyLimitRpcContract,
     "setConfiguration"
-  >({ method: "setConfiguration" });
+  >({
+    method: "setConfiguration",
+    optimistic(input, cache) {
+      cache.update("getConfiguration", null, (current) => {
+        const next =
+          "field" in input ? applyLimitSetting(current, input) : input;
+        return {
+          ...current,
+          ...next,
+          hosts: current.hosts.map((host) => {
+            const override =
+              next.hostOverrides.find((entry) => entry.hostId === host.id)
+                ?.limit ?? null;
+            return {
+              ...host,
+              override,
+              effectiveLimit: override ?? host.automaticLimit,
+            };
+          }),
+        };
+      });
+    },
+  });
   const view = query.data ?? null;
   const latestView = useRef(view);
   const dirty = useRef(new Set<string>());
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const latestDrafts = useRef(drafts);
+  latestDrafts.current = drafts;
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setError] = useState<string | null>(null);
   const [invalidField, setInvalidField] = useState<string | null>(null);
@@ -74,8 +99,15 @@ function ConcurrencyLimitSettings() {
       applyView(view);
     }
   }, [view, applyView]);
+  const lastConfirmedRead = useRef(query.dataUpdatedAt);
   useEffect(() => {
-    if (view !== null && !query.isFetching && query.error === null) {
+    if (
+      view !== null &&
+      !query.isFetching &&
+      query.error === null &&
+      query.dataUpdatedAt !== lastConfirmedRead.current
+    ) {
+      lastConfirmedRead.current = query.dataUpdatedAt;
       setError(null);
       setSaveState((current) => (current === "error" ? "idle" : current));
     }
@@ -91,11 +123,21 @@ function ConcurrencyLimitSettings() {
     setSaveState("saving");
     setError(null);
     try {
-      const saved = await mutate(next);
+      const submitted = latestDrafts.current[field];
+      await mutate(
+        field === GLOBAL_FIELD
+          ? { field: "global", limit: next.globalLimit }
+          : {
+              field: "host",
+              hostId: field,
+              limit:
+                next.hostOverrides.find((override) => override.hostId === field)
+                  ?.limit ?? null,
+            },
+      );
       if (!activeRef.current) return;
-      dirty.current.delete(field);
-      latestView.current = saved;
-      applyView(saved);
+      if (latestDrafts.current[field] === submitted)
+        dirty.current.delete(field);
       setSaveState("saved");
     } catch (saveError) {
       if (!activeRef.current) return;
@@ -169,7 +211,14 @@ function ConcurrencyLimitSettings() {
     );
   }
 
-  const disabled = saveState === "saving";
+  const pending = (field: string) =>
+    pendingInputs.some(
+      (input) =>
+        !("field" in input) ||
+        (input.field === "global"
+          ? field === GLOBAL_FIELD
+          : field === input.hostId),
+    );
   const validationMessage = `Use a whole number from 0 to ${MAX_LIMIT_VALUE}, or leave blank.`;
 
   return (
@@ -185,7 +234,7 @@ function ConcurrencyLimitSettings() {
           aria-label="Overall thread limit"
           aria-invalid={invalidField === GLOBAL_FIELD}
           className="w-28 shrink-0"
-          disabled={disabled}
+          aria-busy={pending(GLOBAL_FIELD)}
           inputMode="numeric"
           max={MAX_LIMIT_VALUE}
           min={0}
@@ -237,7 +286,7 @@ function ConcurrencyLimitSettings() {
                     aria-label={`${host.name} thread limit`}
                     aria-invalid={invalidField === host.id}
                     className="w-28 shrink-0"
-                    disabled={disabled}
+                    aria-busy={pending(host.id)}
                     inputMode="numeric"
                     max={MAX_LIMIT_VALUE}
                     min={0}
@@ -278,7 +327,7 @@ function ConcurrencyLimitSettings() {
           </span>
         ) : (
           <span className="text-xs text-muted-foreground" role="status">
-            {saveState === "saving" ? "Saving…" : "Saved"}
+            {isPending ? "Saving…" : "Saved"}
           </span>
         )}
       </div>

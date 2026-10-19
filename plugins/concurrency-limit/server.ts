@@ -10,6 +10,7 @@ import {
 import { z } from "zod";
 import { concurrencyLimitHostContract } from "./contract.js";
 import {
+  applyLimitSetting,
   automaticHostLimit,
   MAX_LIMIT_VALUE,
   parseLimitValue,
@@ -88,7 +89,19 @@ export const concurrencyLimitRpcContract = defineRpcContract({
     tags: () => ["configuration"],
   },
   setConfiguration: {
-    input: configurationSchema,
+    input: z.union([
+      configurationSchema,
+      z
+        .object({ field: z.literal("global"), limit: limitSchema.nullable() })
+        .strict(),
+      z
+        .object({
+          field: z.literal("host"),
+          hostId: z.string().min(1).max(256),
+          limit: limitSchema.nullable(),
+        })
+        .strict(),
+    ]),
     output: hostConfigurationSchema,
     invalidates: () => ["configuration"],
   },
@@ -250,11 +263,21 @@ export default async function concurrencyLimitPlugin(
     await bb.storage.kv.set(CAPACITIES_KEY, records);
   }
 
+  let configurationWrites = Promise.resolve();
   bb.rpc.register(concurrencyLimitRpcContract, {
     getConfiguration: readConfiguration,
-    async setConfiguration(next) {
-      await saveConfiguration(next);
-      return readConfiguration();
+    setConfiguration(next) {
+      const write = configurationWrites.then(async () => {
+        await saveConfiguration(
+          "field" in next ? applyLimitSetting(configuration, next) : next,
+        );
+        return readConfiguration();
+      });
+      configurationWrites = write.then(
+        () => undefined,
+        () => undefined,
+      );
+      return write;
     },
   });
 
