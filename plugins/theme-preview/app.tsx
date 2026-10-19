@@ -3185,7 +3185,6 @@ function ThemePicker({
         }
       : diskSwatch;
   const pending = selectionPending;
-  const unavailable = pending;
   const loading = catalog.themes.length === 0;
   const accessibleName = loading
     ? "Loading themes"
@@ -3207,6 +3206,7 @@ function ThemePicker({
     >
       <div
         data-tp-theme-picker-row=""
+        aria-busy={pending}
         style={{
           display: "flex",
           alignItems: "center",
@@ -3222,9 +3222,9 @@ function ThemePicker({
         >
           <SelectTrigger
             data-tp-theme-control=""
-            aria-busy={unavailable}
+            aria-busy={pending}
             aria-label={accessibleName}
-            disabled={unavailable || loading}
+            disabled={loading}
             className="h-8 min-w-36 gap-2 overflow-hidden text-sm disabled:opacity-100"
             style={{ width: "fit-content", maxWidth: "100%", flex: "1 1 auto" }}
           >
@@ -3268,7 +3268,7 @@ function ThemePicker({
         </Select>
         <ModeSwitch
           mode={displayMode}
-          disabled={unavailable || loading}
+          disabled={loading}
           onPick={(next) => {
             if (current) onPick(current.id, next);
           }}
@@ -3441,13 +3441,14 @@ function PreviewPage({ subPath }: { subPath: string }) {
     };
   }, []);
 
+  const latestSelection = useRef<ThemeSelection | null>(null);
   const applySelection = (selection: ThemeSelection) => {
-    if (selectionMutation.isPending) return;
+    latestSelection.current = selection;
     setMode(selection.mode);
     setFailedSelection(null);
-    selectionMutation
-      .mutate({ themeId: selection.themeId })
-      .catch(() => setFailedSelection(selection));
+    selectionMutation.mutate({ themeId: selection.themeId }).catch(() => {
+      if (latestSelection.current === selection) setFailedSelection(selection);
+    });
   };
   const pick = (themeId: string, nextMode: Mode) =>
     applySelection({ themeId, mode: nextMode });

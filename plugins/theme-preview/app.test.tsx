@@ -870,7 +870,7 @@ describe("Theme Preview", () => {
     },
   );
 
-  it("owns a visible pending state and blocks duplicate selections", async () => {
+  it("keeps the theme picker interactive with visible pending feedback", async () => {
     const pending = deferred<Catalog>();
     let current = DEFAULT_CATALOG;
     let selectionCalls = 0;
@@ -890,11 +890,12 @@ describe("Theme Preview", () => {
     const control = await screen.findByRole("combobox", {
       name: /Applying Endless Color/i,
     });
-    expect((control as HTMLButtonElement).disabled).toBe(true);
+    expect((control as HTMLButtonElement).disabled).toBe(false);
     expect(control.getAttribute("aria-busy")).toBe("true");
     fireEvent.click(control);
     expect(selectionCalls).toBe(1);
-    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.queryByRole("listbox")).not.toBeNull();
+    fireEvent.keyDown(control, { key: "Escape" });
 
     await act(async () => pending.resolve(ENDLESS_CATALOG));
     await waitFor(() =>
@@ -968,7 +969,7 @@ describe("Theme Preview", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(control.disabled).toBe(true);
+    expect(control.disabled).toBe(false);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
